@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, getAssistantTexts, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
@@ -228,6 +228,58 @@ describe("AgentSession compaction characterization", () => {
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 
 		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(true);
+	});
+
+	it("submits a new prompt after pre-prompt overflow compaction instead of continuing assistant-last", async () => {
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "pre-prompt overflow compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+
+		const now = Date.now();
+		const previousAssistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: 100,
+			timestamp: now - 2000,
+		});
+		const overflowAssistant = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "prompt is too long",
+			timestamp: now,
+		});
+
+		harness.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "previous prompt" }],
+			timestamp: now - 3000,
+		});
+		harness.sessionManager.appendMessage(previousAssistant);
+		harness.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "overflow prompt" }],
+			timestamp: now - 1000,
+		});
+		harness.sessionManager.appendMessage(overflowAssistant);
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		harness.setResponses([fauxAssistantMessage("next response")]);
+		const continueSpy = vi.spyOn(harness.session.agent, "continue");
+
+		await expect(harness.session.prompt("next prompt")).resolves.toBeUndefined();
+
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(getUserTexts(harness)).toContain("next prompt");
+		expect(getAssistantTexts(harness)).toContain("next response");
 	});
 
 	it("does not retry overflow recovery more than once", async () => {
