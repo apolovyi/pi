@@ -165,6 +165,12 @@ export async function createAgentSessionServices(
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
+	for (const diagnostic of resourceLoader.getAgentsFiles().diagnostics) {
+		diagnostics.push({
+			type: diagnostic.type === "error" ? "error" : "warning",
+			message: diagnostic.path ? `${diagnostic.message} (${diagnostic.path})` : diagnostic.message,
+		});
+	}
 
 	return {
 		cwd,
