@@ -96,7 +96,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
-import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -1102,11 +1102,24 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
+	private _canContinueCurrentTranscript(): boolean {
+		const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
+		const convertedLastMessage = lastMessage ? convertToLlm([lastMessage])[0] : undefined;
+		return (
+			this.agent.hasQueuedMessages() ||
+			convertedLastMessage?.role === "user" ||
+			convertedLastMessage?.role === "toolResult"
+		);
+	}
+
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
+				if (!this._canContinueCurrentTranscript()) {
+					break;
+				}
 				await this.agent.continue();
 			}
 		} finally {
@@ -1260,10 +1273,10 @@ export class AgentSession {
 			}
 
 			// Check if we need to compact before sending (catches aborted responses).
-			// The user's new prompt is sent below, so do not call agent.continue() here.
+			// The new user message below is the next prompt, so do not continue from the old transcript here.
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
+				await this._checkCompaction(lastAssistant, false, false);
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -2154,7 +2167,11 @@ export class AgentSession {
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		willRetryOverflow = true,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
 
@@ -2223,7 +2240,7 @@ export class AgentSession {
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
 			}
-			return await this._runAutoCompaction("overflow", willRetry);
+			return await this._runAutoCompaction("overflow", willRetry && willRetryOverflow);
 		}
 
 		// Case 3: threshold compaction without retry.
@@ -2419,7 +2436,7 @@ export class AgentSession {
 				if (lastMsg?.role === "assistant" && (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")) {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
-				return true;
+				return this._canContinueCurrentTranscript();
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
