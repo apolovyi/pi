@@ -2076,7 +2076,8 @@ export class AgentSession {
 			}
 			contextTokens = estimate.tokens;
 		} else {
-			contextTokens = directContextTokens;
+			const estimate = estimateContextTokens(this.agent.state.messages);
+			contextTokens = Math.max(directContextTokens, estimate.tokens);
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			const cooldownMessage = this._getAutoCompactionCooldownMessage();

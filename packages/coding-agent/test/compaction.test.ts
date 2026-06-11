@@ -191,9 +191,23 @@ function extractText(messages: AgentMessage[]): string {
 // ============================================================================
 
 describe("Token calculation", () => {
-	it("should calculate total context tokens from usage", () => {
+	it("should calculate context pressure from input and cache usage", () => {
 		const usage = createMockUsage(1000, 500, 200, 100);
-		expect(calculateContextTokens(usage)).toBe(1800);
+		expect(calculateContextTokens(usage)).toBe(1300);
+	});
+
+	it("should ignore output-heavy reasoning tokens when calculating context pressure", () => {
+		const usage = createMockUsage(1000, 900_000, 0, 0);
+		expect(calculateContextTokens(usage)).toBe(1000);
+	});
+
+	it("should estimate replayable assistant content without using prior output totals", () => {
+		const assistant = createAssistantMessage("visible replay text", createMockUsage(1000, 900_000));
+		const estimate = estimateContextTokens([assistant]);
+
+		expect(estimate.usageTokens).toBe(1000);
+		expect(estimate.tokens).toBeGreaterThan(1000);
+		expect(estimate.tokens).toBeLessThan(1100);
 	});
 
 	it("should handle zero values", () => {
