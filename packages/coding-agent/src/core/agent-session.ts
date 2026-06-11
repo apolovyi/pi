@@ -248,6 +248,9 @@ interface ToolDefinitionEntry {
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+const INEFFECTIVE_COMPACTION_SAVINGS_PERCENT = 10;
+const MAX_INEFFECTIVE_AUTO_COMPACTIONS = 2;
+const AUTO_COMPACTION_COOLDOWN_MS = 30_000;
 
 // ============================================================================
 // AgentSession Class
@@ -275,6 +278,8 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _ineffectiveAutoCompactionCount = 0;
+	private _autoCompactionCooldownUntil = 0;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -936,6 +941,38 @@ export class AgentSession {
 	private _canContinueCurrentTranscript(): boolean {
 		const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
 		return this.agent.hasQueuedMessages() || lastMessage?.role === "user" || lastMessage?.role === "toolResult";
+	}
+
+	private _getAutoCompactionCooldownMessage(): string | undefined {
+		const now = Date.now();
+		if (this._autoCompactionCooldownUntil > now) {
+			const seconds = Math.ceil((this._autoCompactionCooldownUntil - now) / 1000);
+			return `Auto-compaction skipped: recent compactions were ineffective or failed. Cooldown ends in ${seconds}s. Try /compact for a manual retry or /new to start fresh.`;
+		}
+		if (this._ineffectiveAutoCompactionCount >= MAX_INEFFECTIVE_AUTO_COMPACTIONS) {
+			this._autoCompactionCooldownUntil = now + AUTO_COMPACTION_COOLDOWN_MS;
+			return `Auto-compaction skipped: last ${this._ineffectiveAutoCompactionCount} compactions each saved less than ${INEFFECTIVE_COMPACTION_SAVINGS_PERCENT}%. Try /compact for a manual retry or /new to start fresh.`;
+		}
+		return undefined;
+	}
+
+	private _recordAutoCompactionEffectiveness(tokensBefore: number, tokensAfter: number): void {
+		const savedTokens = tokensBefore - tokensAfter;
+		const savingsPercent = tokensBefore > 0 ? (savedTokens / tokensBefore) * 100 : 0;
+		if (savingsPercent < INEFFECTIVE_COMPACTION_SAVINGS_PERCENT) {
+			this._ineffectiveAutoCompactionCount++;
+			if (this._ineffectiveAutoCompactionCount >= MAX_INEFFECTIVE_AUTO_COMPACTIONS) {
+				this._autoCompactionCooldownUntil = Date.now() + AUTO_COMPACTION_COOLDOWN_MS;
+			}
+			return;
+		}
+		this._ineffectiveAutoCompactionCount = 0;
+		this._autoCompactionCooldownUntil = 0;
+	}
+
+	private _recordFailedAutoCompaction(): void {
+		this._ineffectiveAutoCompactionCount++;
+		this._autoCompactionCooldownUntil = Date.now() + AUTO_COMPACTION_COOLDOWN_MS;
 	}
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
@@ -1842,6 +1879,19 @@ export class AgentSession {
 				return false;
 			}
 
+			const cooldownMessage = this._getAutoCompactionCooldownMessage();
+			if (cooldownMessage) {
+				this._emit({
+					type: "compaction_end",
+					reason: "overflow",
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					errorMessage: cooldownMessage,
+				});
+				return false;
+			}
+
 			this._overflowRecoveryAttempted = true;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
@@ -1876,6 +1926,18 @@ export class AgentSession {
 			contextTokens = calculateContextTokens(assistantMessage.usage);
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
+			const cooldownMessage = this._getAutoCompactionCooldownMessage();
+			if (cooldownMessage) {
+				this._emit({
+					type: "compaction_end",
+					reason: "threshold",
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					errorMessage: cooldownMessage,
+				});
+				return false;
+			}
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -1926,12 +1988,15 @@ export class AgentSession {
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
+				this._recordAutoCompactionEffectiveness(1, 1);
 				this._emit({
 					type: "compaction_end",
 					reason,
 					result: undefined,
 					aborted: false,
 					willRetry: false,
+					errorMessage:
+						"Auto-compaction skipped: no compactable window was found. Try /compact for a manual retry or /new to start fresh.",
 				});
 				return false;
 			}
@@ -2009,6 +2074,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
+			this._recordAutoCompactionEffectiveness(tokensBefore, estimateContextTokens(this.agent.state.messages).tokens);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2044,6 +2110,7 @@ export class AgentSession {
 			// Continue once so queued messages are delivered.
 			return this.agent.hasQueuedMessages();
 		} catch (error) {
+			this._recordFailedAutoCompaction();
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			this._emit({
 				type: "compaction_end",

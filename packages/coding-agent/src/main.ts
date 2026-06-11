@@ -158,6 +158,12 @@ async function findLocalSessionByExactId(
 	return localMatch ? { type: "local", path: localMatch.path } : undefined;
 }
 
+async function findAnySessionByExactId(sessionId: string, sessionDir?: string): Promise<{ path: string } | undefined> {
+	const sessions = await SessionManager.listAll(sessionDir);
+	const match = sessions.find((s) => s.id === sessionId);
+	return match ? { path: match.path } : undefined;
+}
+
 async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: string): Promise<ResolvedSession> {
 	// If it looks like a file path, resolve it before handing it to the session manager.
 	if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
@@ -262,7 +268,7 @@ async function createSessionManager(
 
 	if (parsed.fork) {
 		if (parsed.sessionId) {
-			const existingTarget = await findLocalSessionByExactId(parsed.sessionId, cwd, sessionDir);
+			const existingTarget = await findAnySessionByExactId(parsed.sessionId, sessionDir);
 			if (existingTarget) {
 				console.error(chalk.red(`Session already exists with id '${parsed.sessionId}'`));
 				process.exit(1);

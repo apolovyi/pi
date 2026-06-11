@@ -432,6 +432,27 @@ describe("AgentSession compaction characterization", () => {
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
 
+	it("backs off auto-compaction after repeated no-op compactions with an observable warning", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await sessionInternals._runAutoCompaction("threshold", false);
+		await sessionInternals._runAutoCompaction("threshold", false);
+
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+		await sessionInternals._checkCompaction(
+			createAssistant(harness, { stopReason: "stop", totalTokens: 1_000_000, timestamp: Date.now() }),
+		);
+
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+		expect(
+			harness
+				.eventsOfType("compaction_end")
+				.some((event) => event.errorMessage?.startsWith("Auto-compaction skipped: recent compactions")),
+		).toBe(true);
+	});
+
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {
 		const belowThresholdHarness = await createHarness({
 			settings: { compaction: { enabled: true, reserveTokens: 1000 } },

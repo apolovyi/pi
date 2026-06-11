@@ -1382,8 +1382,10 @@ export class InteractiveMode {
 			}
 		}
 
+		const agentsFilesResult = this.session.resourceLoader.getAgentsFiles();
+
 		if (showListing) {
-			const contextFiles = this.session.resourceLoader.getAgentsFiles().agentsFiles;
+			const contextFiles = agentsFilesResult.agentsFiles;
 			if (contextFiles.length > 0) {
 				this.chatContainer.addChild(new Spacer(1));
 				const contextList = contextFiles
@@ -1465,6 +1467,13 @@ export class InteractiveMode {
 		}
 
 		if (showDiagnostics) {
+			const contextDiagnostics = agentsFilesResult.diagnostics ?? [];
+			if (contextDiagnostics.length > 0) {
+				const warningLines = this.formatDiagnostics(contextDiagnostics, sourceInfos);
+				this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Context issues]")}\n${warningLines}`, 0, 0));
+				this.chatContainer.addChild(new Spacer(1));
+			}
+
 			const skillDiagnostics = skillsResult.diagnostics;
 			if (skillDiagnostics.length > 0) {
 				const warningLines = this.formatDiagnostics(skillDiagnostics, sourceInfos);
