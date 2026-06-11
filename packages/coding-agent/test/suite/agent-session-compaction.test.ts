@@ -2,6 +2,7 @@ import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
+	getModel,
 	type Model,
 	type Usage,
 } from "@earendil-works/pi-ai";
@@ -12,6 +13,22 @@ type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
+
+function createCodexGpt55FauxModel() {
+	const codexModel = getModel("openai-codex", "gpt-5.5");
+	if (!codexModel?.contextWindow) {
+		throw new Error("Model openai-codex/gpt-5.5 not found");
+	}
+	return {
+		id: codexModel.id,
+		name: codexModel.name,
+		reasoning: codexModel.reasoning,
+		input: [...(codexModel.input ?? ["text" as const])],
+		contextWindow: codexModel.contextWindow,
+		maxTokens: codexModel.maxTokens,
+		...(codexModel.cost ? { cost: codexModel.cost } : {}),
+	};
+}
 
 function createUsage(totalTokens: number, overrides: Partial<Usage> = {}): Usage {
 	const usage = {
@@ -435,17 +452,56 @@ describe("AgentSession compaction characterization", () => {
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
 
-	it("does not trigger threshold compaction from prior output-heavy reasoning totals", async () => {
+	it("uses openai-codex/gpt-5.5 metadata for the 167k compaction threshold", async () => {
+		const codexModel = createCodexGpt55FauxModel();
+		const reserveTokens = 105_000;
+		const threshold = codexModel.contextWindow - reserveTokens;
+		expect(codexModel.contextWindow).toBe(272_000);
+		expect(threshold).toBe(167_000);
+
 		const harness = await createHarness({
-			settings: { compaction: { enabled: true, reserveTokens: 1_000 } },
-			models: [{ id: "gpt-5.5", contextWindow: 200_000, reasoning: true }],
+			settings: { compaction: { enabled: true, reserveTokens } },
+			models: [codexModel],
+		});
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+		const atThresholdAssistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: threshold,
+			usage: { input: threshold, output: 0, cacheRead: 0, cacheWrite: 0 },
+			timestamp: Date.now(),
+		});
+		harness.session.agent.state.messages = [atThresholdAssistant];
+
+		await sessionInternals._checkCompaction(atThresholdAssistant);
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+
+		const aboveThresholdAssistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: threshold + 1,
+			usage: { input: threshold + 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+			timestamp: Date.now() + 1,
+		});
+		harness.session.agent.state.messages = [aboveThresholdAssistant];
+
+		await sessionInternals._checkCompaction(aboveThresholdAssistant);
+		expect(runAutoCompactionSpy).toHaveBeenCalledOnce();
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+	});
+
+	it("does not trigger Codex threshold compaction from prior output-heavy reasoning totals", async () => {
+		const codexModel = createCodexGpt55FauxModel();
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, reserveTokens: 105_000 } },
+			models: [codexModel],
 		});
 		harnesses.push(harness);
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 		const assistant = createAssistant(harness, {
 			stopReason: "stop",
-			totalTokens: 199_500,
-			usage: { input: 1_000, output: 198_500, cacheRead: 0, cacheWrite: 0 },
+			totalTokens: 260_000,
+			usage: { input: 1_000, output: 259_000, cacheRead: 0, cacheWrite: 0 },
 			timestamp: Date.now(),
 		});
 		harness.session.agent.state.messages = [
