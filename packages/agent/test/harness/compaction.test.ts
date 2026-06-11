@@ -162,8 +162,9 @@ describe("harness compaction", () => {
 		nextId = 0;
 	});
 
-	it("calculates total context tokens from usage", () => {
-		expect(calculateContextTokens(createMockUsage(1000, 500, 200, 100))).toBe(1800);
+	it("calculates context pressure from input and cache usage", () => {
+		expect(calculateContextTokens(createMockUsage(1000, 500, 200, 100))).toBe(1300);
+		expect(calculateContextTokens(createMockUsage(1000, 900_000, 0, 0))).toBe(1000);
 		expect(calculateContextTokens(createMockUsage(0, 0, 0, 0))).toBe(0);
 	});
 
@@ -325,7 +326,7 @@ describe("harness compaction", () => {
 		).toBe(usage);
 		expect(estimateContextTokens([createUserMessage("no usage")]).lastUsageIndex).toBeNull();
 		expect(estimateContextTokens([assistant, createUserMessage("tail")])).toMatchObject({
-			usageTokens: 20,
+			usageTokens: 15,
 			lastUsageIndex: 0,
 		});
 		const estimate = estimateContextTokens([
