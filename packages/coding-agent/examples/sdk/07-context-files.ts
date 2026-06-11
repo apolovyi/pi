@@ -28,6 +28,7 @@ const loader = new DefaultResourceLoader({
 - Prefer const over let`,
 			},
 		],
+		diagnostics: current.diagnostics,
 	}),
 });
 await loader.reload();

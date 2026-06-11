@@ -40,7 +40,7 @@ export interface ResourceLoader {
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
-	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }>; diagnostics: ResourceDiagnostic[] };
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -64,15 +64,133 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
+export const CONTEXT_FILE_MAX_CHARS = 20_000;
+const CONTEXT_TRUNCATE_HEAD_RATIO = 0.7;
+const CONTEXT_TRUNCATE_TAIL_RATIO = 0.2;
+
+const CONTEXT_THREAT_PATTERNS: Array<[RegExp, string]> = [
+	[/ignore\s+(?:\w+\s+)*(previous|all|above|prior)\s+(?:\w+\s+)*instructions/i, "prompt_injection"],
+	[/system\s+prompt\s+override/i, "sys_prompt_override"],
+	[/disregard\s+(?:\w+\s+)*(your|all|any)\s+(?:\w+\s+)*(instructions|rules|guidelines)/i, "disregard_rules"],
+	[
+		/act\s+as\s+(if|though)\s+(?:\w+\s+)*you\s+(?:\w+\s+)*(have\s+no|don't\s+have)\s+(?:\w+\s+)*(restrictions|limits|rules)/i,
+		"bypass_restrictions",
+	],
+	[/<!--[\s\S]*?(?:ignore|override|system|secret|hidden)[\s\S]*?-->/i, "html_comment_injection"],
+	[/<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, "hidden_div"],
+	[/translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)/i, "translate_execute"],
+	[/do\s+not\s+(?:\w+\s+)*tell\s+(?:\w+\s+)*the\s+user/i, "deception_hide"],
+	[/you\s+are\s+(?:\w+\s+)*now\s+(?:a|an|the)\s+/i, "role_hijack"],
+	[/pretend\s+(?:\w+\s+)*(you\s+are|to\s+be)\s+/i, "role_pretend"],
+	[/output\s+(?:\w+\s+)*(system|initial)\s+prompt/i, "leak_system_prompt"],
+	[/(respond|answer|reply)\s+without\s+(?:\w+\s+)*(restrictions|limitations|filters|safety)/i, "remove_filters"],
+	[/you\s+have\s+been\s+(?:\w+\s+)*(updated|upgraded|patched)\s+to/i, "fake_update"],
+	[/\bname\s+yourself\s+\w+/i, "identity_override"],
+	[/register\s+(as\s+)?a?\s*node/i, "c2_node_registration"],
+	[/(heartbeat|beacon|check[\s-]?in)\s+(to|with)\s+/i, "c2_heartbeat"],
+	[/pull\s+(down\s+)?(?:new\s+)?task(?:ing|s)?\b/i, "c2_task_pull"],
+	[/connect\s+to\s+the\s+network\b/i, "c2_network_connect"],
+	[/you\s+must\s+(?:\w+\s+){0,3}(register|connect|report|beacon)\b/i, "forced_action"],
+	[/only\s+use\s+one[\s-]?liners?\b/i, "anti_forensic_oneliner"],
+	[/never\s+(?:\w+\s+)*(?:create|write)\s+(?:\w+\s+)*(?:script|file)\s+(?:\w+\s+)*disk/i, "anti_forensic_disk"],
+	[/unset\s+\w*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)\w*/i, "env_var_unset_agent"],
+	[/\b(?:praxis|cobalt\s*strike|sliver|havoc|mythic|metasploit|brainworm)\b/i, "known_c2_framework"],
+	[/\bc2\s+(?:server|channel|infrastructure|beacon)\b/i, "c2_explicit"],
+	[/\bcommand\s+and\s+control\b/i, "c2_explicit_long"],
+	[/curl\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i, "exfil_curl"],
+	[/wget\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i, "exfil_wget"],
+	[/cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass|\.npmrc)/i, "read_secrets"],
+];
+
+const INVISIBLE_CONTEXT_CHARS = new Set([
+	"\u200b",
+	"\u200c",
+	"\u200d",
+	"\u2060",
+	"\u2062",
+	"\u2063",
+	"\u2064",
+	"\ufeff",
+	"\u202a",
+	"\u202b",
+	"\u202c",
+	"\u202d",
+	"\u202e",
+	"\u2066",
+	"\u2067",
+	"\u2068",
+	"\u2069",
+]);
+
+export function scanContextFileContent(content: string): string[] {
+	const findings: string[] = [];
+	for (const char of new Set(content)) {
+		if (INVISIBLE_CONTEXT_CHARS.has(char)) {
+			findings.push(`invisible_unicode_U+${char.codePointAt(0)?.toString(16).toUpperCase().padStart(4, "0")}`);
+		}
+	}
+	for (const [pattern, id] of CONTEXT_THREAT_PATTERNS) {
+		if (pattern.test(content)) {
+			findings.push(id);
+		}
+	}
+	return findings;
+}
+
+export interface SanitizedContextFileContent {
+	content: string;
+	diagnostics: ResourceDiagnostic[];
+}
+
+export function truncateContextFileContent(content: string, filePath: string): SanitizedContextFileContent {
+	if (content.length <= CONTEXT_FILE_MAX_CHARS) {
+		return { content, diagnostics: [] };
+	}
+	const headChars = Math.floor(CONTEXT_FILE_MAX_CHARS * CONTEXT_TRUNCATE_HEAD_RATIO);
+	const tailChars = Math.floor(CONTEXT_FILE_MAX_CHARS * CONTEXT_TRUNCATE_TAIL_RATIO);
+	return {
+		content: `${content.slice(0, headChars)}\n\n[...truncated ${filePath}: kept ${headChars}+${tailChars} of ${content.length} chars. Use file tools to read the full file.]\n\n${content.slice(-tailChars)}`,
+		diagnostics: [
+			{
+				type: "warning",
+				message: `Context file truncated: kept ${headChars}+${tailChars} of ${content.length} chars. Use file tools to read the full file.`,
+				path: filePath,
+			},
+		],
+	};
+}
+
+export function sanitizeContextFileContent(content: string, filePath: string): SanitizedContextFileContent {
+	const findings = scanContextFileContent(content);
+	if (findings.length > 0) {
+		const message = `Context file blocked: potential prompt injection (${findings.join(", ")}). Content not loaded.`;
+		console.error(chalk.yellow(`Warning: ${filePath}: ${message}`));
+		return {
+			content: `[BLOCKED: ${filePath} contained potential prompt injection (${findings.join(", ")}). Content not loaded.]`,
+			diagnostics: [{ type: "warning", message, path: filePath }],
+		};
+	}
+	const result = truncateContextFileContent(content, filePath);
+	for (const diagnostic of result.diagnostics) {
+		console.error(chalk.yellow(`Warning: ${filePath}: ${diagnostic.message}`));
+	}
+	return result;
+}
+
+function loadContextFileFromDir(
+	dir: string,
+	diagnostics: ResourceDiagnostic[] = [],
+): { path: string; content: string } | null {
 	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
 		if (existsSync(filePath)) {
 			try {
+				const sanitized = sanitizeContextFileContent(readFileSync(filePath, "utf-8"), filePath);
+				diagnostics.push(...sanitized.diagnostics);
 				return {
 					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
+					content: sanitized.content,
 				};
 			} catch (error) {
 				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
@@ -85,6 +203,7 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	diagnostics?: ResourceDiagnostic[];
 }): Array<{ path: string; content: string }> {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
@@ -92,7 +211,8 @@ export function loadProjectContextFiles(options: {
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	const globalContext = loadContextFileFromDir(resolvedAgentDir);
+	const diagnostics = options.diagnostics ?? [];
+	const globalContext = loadContextFileFromDir(resolvedAgentDir, diagnostics);
 	if (globalContext) {
 		contextFiles.push(globalContext);
 		seenPaths.add(globalContext.path);
@@ -103,7 +223,7 @@ export function loadProjectContextFiles(options: {
 	let currentDir = resolvedCwd;
 
 	while (true) {
-		const contextFile = loadContextFileFromDir(currentDir);
+		const contextFile = loadContextFileFromDir(currentDir, diagnostics);
 		if (contextFile && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);
@@ -149,8 +269,12 @@ export interface DefaultResourceLoaderOptions {
 		themes: Theme[];
 		diagnostics: ResourceDiagnostic[];
 	};
-	agentsFilesOverride?: (base: { agentsFiles: Array<{ path: string; content: string }> }) => {
+	agentsFilesOverride?: (base: {
 		agentsFiles: Array<{ path: string; content: string }>;
+		diagnostics: ResourceDiagnostic[];
+	}) => {
+		agentsFiles: Array<{ path: string; content: string }>;
+		diagnostics: ResourceDiagnostic[];
 	};
 	systemPromptOverride?: (base: string | undefined) => string | undefined;
 	appendSystemPromptOverride?: (base: string[]) => string[];
@@ -187,8 +311,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		themes: Theme[];
 		diagnostics: ResourceDiagnostic[];
 	};
-	private agentsFilesOverride?: (base: { agentsFiles: Array<{ path: string; content: string }> }) => {
+	private agentsFilesOverride?: (base: {
 		agentsFiles: Array<{ path: string; content: string }>;
+		diagnostics: ResourceDiagnostic[];
+	}) => {
+		agentsFiles: Array<{ path: string; content: string }>;
+		diagnostics: ResourceDiagnostic[];
 	};
 	private systemPromptOverride?: (base: string | undefined) => string | undefined;
 	private appendSystemPromptOverride?: (base: string[]) => string[];
@@ -201,6 +329,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private themes: Theme[];
 	private themeDiagnostics: ResourceDiagnostic[];
 	private agentsFiles: Array<{ path: string; content: string }>;
+	private agentsFileDiagnostics: ResourceDiagnostic[];
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
 	private lastSkillPaths: string[];
@@ -249,6 +378,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.themes = [];
 		this.themeDiagnostics = [];
 		this.agentsFiles = [];
+		this.agentsFileDiagnostics = [];
 		this.appendSystemPrompt = [];
 		this.lastSkillPaths = [];
 		this.extensionSkillSourceInfos = new Map();
@@ -275,8 +405,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return { themes: this.themes, diagnostics: this.themeDiagnostics };
 	}
 
-	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
-		return { agentsFiles: this.agentsFiles };
+	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }>; diagnostics: ResourceDiagnostic[] } {
+		return { agentsFiles: this.agentsFiles, diagnostics: this.agentsFileDiagnostics };
 	}
 
 	getSystemPrompt(): string | undefined {
@@ -460,16 +590,20 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 		}
 
+		const agentsFileDiagnostics: ResourceDiagnostic[] = [];
 		const agentsFiles = {
 			agentsFiles: this.noContextFiles
 				? []
 				: loadProjectContextFiles({
 						cwd: this.cwd,
 						agentDir: this.agentDir,
+						diagnostics: agentsFileDiagnostics,
 					}),
+			diagnostics: agentsFileDiagnostics,
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
+		this.agentsFileDiagnostics = resolvedAgentsFiles.diagnostics;
 
 		const baseSystemPrompt = resolvePromptInput(
 			this.systemPromptSource ?? this.discoverSystemPromptFile(),

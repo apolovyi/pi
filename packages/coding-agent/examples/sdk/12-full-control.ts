@@ -38,7 +38,7 @@ const resourceLoader: ResourceLoader = {
 	getSkills: () => ({ skills: [], diagnostics: [] }),
 	getPrompts: () => ({ prompts: [], diagnostics: [] }),
 	getThemes: () => ({ themes: [], diagnostics: [] }),
-	getAgentsFiles: () => ({ agentsFiles: [] }),
+	getAgentsFiles: () => ({ agentsFiles: [], diagnostics: [] }),
 	getSystemPrompt: () => `You are a minimal assistant.
 Available: read, bash. Be concise.`,
 	getAppendSystemPrompt: () => [],
