@@ -933,10 +933,18 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
+	private _canContinueCurrentTranscript(): boolean {
+		const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
+		return this.agent.hasQueuedMessages() || lastMessage?.role === "user" || lastMessage?.role === "toolResult";
+	}
+
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
+				if (!this._canContinueCurrentTranscript()) {
+					break;
+				}
 				await this.agent.continue();
 			}
 		} finally {
@@ -1063,17 +1071,11 @@ export class AgentSession {
 				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 			}
 
-			// Check if we need to compact before sending (catches aborted responses)
+			// Check if we need to compact before sending (catches aborted responses).
+			// The new user message below is the next prompt, so do not continue from the old transcript here.
 			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant && (await this._checkCompaction(lastAssistant, false))) {
-				try {
-					await this.agent.continue();
-					while (await this._handlePostAgentRun()) {
-						await this.agent.continue();
-					}
-				} finally {
-					this._flushPendingBashMessages();
-				}
+			if (lastAssistant) {
+				await this._checkCompaction(lastAssistant, false, false);
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -1795,7 +1797,11 @@ export class AgentSession {
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		willRetryOverflow = true,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
 
@@ -1843,7 +1849,7 @@ export class AgentSession {
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
 			}
-			return await this._runAutoCompaction("overflow", true);
+			return await this._runAutoCompaction("overflow", willRetryOverflow);
 		}
 
 		// Case 2: Threshold - context is getting large
@@ -2031,7 +2037,7 @@ export class AgentSession {
 				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
-				return true;
+				return this._canContinueCurrentTranscript();
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
