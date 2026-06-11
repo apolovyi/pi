@@ -115,9 +115,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	keepRecentTokens: 20000,
 };
 
-/** Calculate total context tokens from provider usage. */
+/** Calculate persistent context pressure from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
-	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	return Math.max(0, usage.input) + Math.max(0, usage.cacheRead) + Math.max(0, usage.cacheWrite);
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 	if (msg.role === "assistant" && "usage" in msg) {
@@ -145,9 +145,9 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
 export interface ContextUsageEstimate {
 	/** Estimated total context tokens. */
 	tokens: number;
-	/** Tokens reported by the most recent assistant usage block. */
+	/** Input/context tokens reported by the most recent assistant usage block. */
 	usageTokens: number;
-	/** Estimated tokens after the most recent assistant usage block. */
+	/** Estimated replay tokens not covered by the most recent usage input. */
 	trailingTokens: number;
 	/** Index of the message that provided usage, or null when none exists. */
 	lastUsageIndex: number | null;
@@ -179,7 +179,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	}
 
 	const usageTokens = calculateContextTokens(usageInfo.usage);
-	let trailingTokens = 0;
+	let trailingTokens = estimateTokens(messages[usageInfo.index]);
 	for (let i = usageInfo.index + 1; i < messages.length; i++) {
 		trailingTokens += estimateTokens(messages[i]);
 	}
