@@ -3,6 +3,7 @@ import {
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 	type Model,
+	type Usage,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
@@ -13,8 +14,8 @@ type SessionWithCompactionInternals = {
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
 
-function createUsage(totalTokens: number) {
-	return {
+function createUsage(totalTokens: number, overrides: Partial<Usage> = {}): Usage {
+	const usage = {
 		input: totalTokens,
 		output: 0,
 		cacheRead: 0,
@@ -22,6 +23,7 @@ function createUsage(totalTokens: number) {
 		totalTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
+	return { ...usage, ...overrides };
 }
 
 function createAssistant(
@@ -30,6 +32,7 @@ function createAssistant(
 		stopReason?: AssistantMessage["stopReason"];
 		errorMessage?: string;
 		totalTokens?: number;
+		usage?: Partial<Usage>;
 		timestamp?: number;
 	},
 ): AssistantMessage {
@@ -43,7 +46,7 @@ function createAssistant(
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: createUsage(options.totalTokens ?? 0),
+		usage: createUsage(options.totalTokens ?? 0, options.usage),
 	};
 }
 
@@ -467,6 +470,30 @@ describe("AgentSession compaction characterization", () => {
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
 		await sessionInternals._checkCompaction(errorAssistant);
+
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not trigger threshold compaction from prior output-heavy reasoning totals", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, reserveTokens: 1_000 } },
+			models: [{ id: "gpt-5.5", contextWindow: 200_000, reasoning: true }],
+		});
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const assistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: 199_500,
+			usage: { input: 1_000, output: 198_500, cacheRead: 0, cacheWrite: 0 },
+			timestamp: Date.now(),
+		});
+		harness.session.agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "small prompt" }], timestamp: Date.now() - 1 },
+			assistant,
+		];
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+
+		await sessionInternals._checkCompaction(assistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});

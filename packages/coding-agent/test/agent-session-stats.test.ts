@@ -88,9 +88,9 @@ describe("AgentSession.getSessionStats", () => {
 
 			const stats = session.getSessionStats();
 			expect(stats.contextUsage).toEqual(session.getContextUsage());
-			expect(stats.contextUsage?.tokens).toBe(200);
+			expect(stats.contextUsage?.tokens).toBe(201);
 			expect(stats.contextUsage?.contextWindow).toBe(model.contextWindow);
-			expect(stats.contextUsage?.percent).toBe((200 / model.contextWindow) * 100);
+			expect(stats.contextUsage?.percent).toBe((201 / model.contextWindow) * 100);
 		} finally {
 			session.dispose();
 		}
@@ -134,8 +134,8 @@ describe("AgentSession.getSessionStats", () => {
 			const stats = session.getSessionStats();
 			expect(stats.tokens.input).toBe(220_000);
 			expect(stats.contextUsage).toBeDefined();
-			expect(stats.contextUsage?.tokens).toBe(25_000);
-			expect(stats.contextUsage?.percent).toBe((25_000 / model.contextWindow) * 100);
+			expect(stats.contextUsage?.tokens).toBe(25_003);
+			expect(stats.contextUsage?.percent).toBe((25_003 / model.contextWindow) * 100);
 		} finally {
 			session.dispose();
 		}
