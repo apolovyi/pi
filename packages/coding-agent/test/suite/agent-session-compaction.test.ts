@@ -311,12 +311,24 @@ describe("AgentSession compaction characterization", () => {
 		);
 	});
 
-	it("compacts successful overflow responses without retrying", async () => {
+	it("exposes successful overflow compaction lifecycle events to extensions", async () => {
+		const extensionEvents: Array<{ type: string; reason: string; willRetry?: boolean; hasResult?: boolean }> = [];
 		const harness = await createHarness({
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
+					pi.on("compaction_start", (event) => {
+						extensionEvents.push({ type: event.type, reason: event.reason });
+					});
+					pi.on("compaction_end", (event) => {
+						extensionEvents.push({
+							type: event.type,
+							reason: event.reason,
+							willRetry: event.willRetry,
+							hasResult: event.result !== undefined,
+						});
+					});
 					pi.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "successful overflow compacted",
@@ -339,6 +351,10 @@ describe("AgentSession compaction characterization", () => {
 			aborted: false,
 			willRetry: false,
 		});
+		expect(extensionEvents).toEqual([
+			{ type: "compaction_start", reason: "overflow" },
+			{ type: "compaction_end", reason: "overflow", willRetry: false, hasResult: true },
+		]);
 		expect(harness.faux.state.callCount).toBe(1);
 	});
 
@@ -498,8 +514,17 @@ describe("AgentSession compaction characterization", () => {
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
 
-	it("backs off auto-compaction after repeated no-op compactions with an observable warning", async () => {
-		const harness = await createHarness();
+	it("exposes auto-compaction cooldown skips to extensions", async () => {
+		const extensionEvents: Array<{ type: string; reason: string; errorMessage?: string }> = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("compaction_end", (event) => {
+						extensionEvents.push({ type: event.type, reason: event.reason, errorMessage: event.errorMessage });
+					});
+				},
+			],
+		});
 		harnesses.push(harness);
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 
@@ -512,11 +537,15 @@ describe("AgentSession compaction characterization", () => {
 		);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
-		expect(
-			harness
-				.eventsOfType("compaction_end")
-				.some((event) => event.errorMessage?.startsWith("Auto-compaction skipped: recent compactions")),
-		).toBe(true);
+		const skippedEvent = harness
+			.eventsOfType("compaction_end")
+			.find((event) => event.errorMessage?.startsWith("Auto-compaction skipped: recent compactions"));
+		expect(skippedEvent).toBeDefined();
+		expect(extensionEvents).toContainEqual({
+			type: "compaction_end",
+			reason: "overflow",
+			errorMessage: skippedEvent?.errorMessage,
+		});
 	});
 
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {
