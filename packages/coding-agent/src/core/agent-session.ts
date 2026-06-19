@@ -69,6 +69,8 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
+	type CompactionEndEvent,
+	type CompactionStartEvent,
 	type ContextUsage,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
@@ -594,6 +596,9 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	private _emit(event: AgentSessionEvent): void {
+		if (event.type === "compaction_start" || event.type === "compaction_end") {
+			void this._extensionRunner.emit(event as CompactionStartEvent | CompactionEndEvent);
+		}
 		for (const l of this._eventListeners) {
 			l(event);
 		}
