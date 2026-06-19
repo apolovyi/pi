@@ -1920,6 +1920,19 @@ export class AgentSession {
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
+			const cooldownMessage = this._getAutoCompactionCooldownMessage();
+			if (cooldownMessage) {
+				this._emit({
+					type: "compaction_end",
+					reason: "overflow",
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					errorMessage: cooldownMessage,
+				});
+				return false;
+			}
+
 			if (!willRetry) {
 				return await this._runAutoCompaction("overflow", false);
 			}
@@ -1933,19 +1946,6 @@ export class AgentSession {
 					willRetry: false,
 					errorMessage:
 						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
-				});
-				return false;
-			}
-
-			const cooldownMessage = this._getAutoCompactionCooldownMessage();
-			if (cooldownMessage) {
-				this._emit({
-					type: "compaction_end",
-					reason: "overflow",
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					errorMessage: cooldownMessage,
 				});
 				return false;
 			}
