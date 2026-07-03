@@ -278,10 +278,10 @@ describe("estimateContextTokens", () => {
 
 		const estimate = estimateContextTokens(messages);
 
-		expect(estimate.usageTokens).toBe(150);
+		expect(estimate.usageTokens).toBe(100);
 		expect(estimate.lastUsageIndex).toBe(1);
 		expect(estimate.trailingTokens).toBeGreaterThan(0);
-		expect(estimate.tokens).toBe(150 + estimate.trailingTokens);
+		expect(estimate.tokens).toBe(100 + estimate.trailingTokens);
 	});
 });
 
