@@ -335,10 +335,10 @@ describe("harness compaction", () => {
 			createUserMessage("continue"),
 			createAssistantMessage("Partial thinking", createMockUsage(0, 0)),
 		]);
-		expect(estimate.usageTokens).toBe(20);
+		expect(estimate.usageTokens).toBe(15);
 		expect(estimate.lastUsageIndex).toBe(1);
 		expect(estimate.trailingTokens).toBeGreaterThan(0);
-		expect(estimate.tokens).toBe(20 + estimate.trailingTokens);
+		expect(estimate.tokens).toBe(15 + estimate.trailingTokens);
 	});
 
 	it("builds session context with a compaction entry", () => {

@@ -258,11 +258,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: model.provider,
 			model: model.id,
 			usage: {
-				input: thresholdTokens - 10_000,
+				input: thresholdTokens,
 				output: 10_000,
 				cacheRead: 0,
 				cacheWrite: 0,
-				totalTokens: thresholdTokens,
+				totalTokens: thresholdTokens + 10_000,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
