@@ -636,6 +636,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("refresh() reloads merged custom models from disk", async () => {
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected network request"));
 			writeModelsJson({
 				anthropic: providerConfig("https://first-proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
@@ -648,6 +649,7 @@ describe("ModelRegistry", () => {
 			});
 			await registry.refresh();
 
+			expect(fetchSpy).not.toHaveBeenCalled();
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 			expect(anthropicModels.some((m) => m.id === "claude-custom")).toBe(false);
 			expect(anthropicModels.some((m) => m.id === "claude-custom-2")).toBe(true);
