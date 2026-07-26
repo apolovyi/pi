@@ -40,7 +40,7 @@ export class ModelRegistry {
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */
 	refresh(options?: ModelsRefreshOptions): Promise<ModelsRefreshResult> {
-		return this.runtime.refresh(options);
+		return this.runtime.refresh({ ...options, allowNetwork: options?.allowNetwork ?? false });
 	}
 
 	getError(): string | undefined {
