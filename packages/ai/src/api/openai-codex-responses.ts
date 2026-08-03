@@ -43,6 +43,8 @@ import { buildBaseOptions } from "./simple-options.ts";
 // ============================================================================
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const CODEX_ORIGINATOR = "codex_cli";
+const CODEX_CLIENT_VERSION = "0.146.0";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth" as const;
 const DEFAULT_MAX_RETRIES = 0;
 const BASE_DELAY_MS = 1000;
@@ -1609,8 +1611,10 @@ function buildBaseCodexHeaders(
 	}
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
-	headers.set("originator", "pi");
-	headers.set("User-Agent", getPiUserAgent());
+	// The ChatGPT backend only honours `service_tier` for requests that identify as a Codex client.
+	headers.set("originator", CODEX_ORIGINATOR);
+	headers.set("version", CODEX_CLIENT_VERSION);
+	headers.set("User-Agent", getPiUserAgent().replace(/^pi /, `${CODEX_ORIGINATOR}/${CODEX_CLIENT_VERSION} `));
 	return headers;
 }
 
