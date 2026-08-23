@@ -170,6 +170,7 @@
 
 ### Fixed
 
+- Fixed Bash caller timeouts killing Unix process groups before commands could run signal cleanup, while retaining forced termination for non-cooperative processes.
 - Fixed failed extension factories leaving event subscriptions, provider registrations, and default flag state active ([#8424](https://github.com/earendil-works/pi/pull/8424) by [@acmerfight](https://github.com/acmerfight)).
 - Fixed `models.json` typings omitting the documented OpenAI-compatible `compat.supportsFinishReason` provider and model override ([#8487](https://github.com/earendil-works/pi/pull/8487) by [@petrroll](https://github.com/petrroll)).
 - Fixed `/model` and `/thinking` selections being persisted globally unless explicitly saved with Ctrl+S ([#5263](https://github.com/earendil-works/pi/issues/5263)).

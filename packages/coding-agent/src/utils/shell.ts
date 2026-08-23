@@ -210,6 +210,33 @@ export function killTrackedDetachedChildren(): void {
 	trackedDetachedChildPids.clear();
 }
 
+const PROCESS_TERMINATION_GRACE_MS = 1000;
+const PROCESS_TERMINATION_POLL_MS = 25;
+
+function signalProcessGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+	try {
+		process.kill(-pid, signal);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export async function terminateProcessTree(pid: number): Promise<void> {
+	if (process.platform === "win32") {
+		killProcessTree(pid);
+		return;
+	}
+	if (!signalProcessGroup(pid, "SIGTERM")) return;
+
+	const deadline = Date.now() + PROCESS_TERMINATION_GRACE_MS;
+	while (Date.now() < deadline) {
+		if (!signalProcessGroup(pid, 0)) return;
+		await new Promise((resolve) => setTimeout(resolve, PROCESS_TERMINATION_POLL_MS));
+	}
+	signalProcessGroup(pid, "SIGKILL");
+}
+
 /**
  * Kill a process and all its children (cross-platform)
  */

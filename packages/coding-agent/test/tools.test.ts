@@ -501,6 +501,54 @@ describe("Coding Agent Tools", () => {
 			await expect(bashTool.execute("test-call-10", { command, timeout: 0.05 })).rejects.toThrow(/timed out/i);
 		});
 
+		it("should allow Unix commands to clean up before timeout escalation", async () => {
+			if (process.platform === "win32") return;
+			const cleanupFile = join(testDir, "timeout-cleanup.txt");
+			const command = `trap 'printf cleaned > ${JSON.stringify(cleanupFile)}' EXIT; while :; do sleep 1; done`;
+
+			await expect(bashTool.execute("test-call-timeout-cleanup", { command, timeout: 0.05 })).rejects.toThrow(
+				/timed out/i,
+			);
+
+			expect(readFileSync(cleanupFile, "utf-8")).toBe("cleaned");
+		});
+
+		it("should force-kill Unix commands that ignore timeout termination", async () => {
+			if (process.platform === "win32") return;
+			const script =
+				"process.stdout.write(String(process.pid) + '\\n'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+			const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+			let error: unknown;
+			try {
+				await bashTool.execute("test-call-timeout-force", { command, timeout: 0.25 });
+			} catch (err) {
+				error = err;
+			}
+			expect(error).toBeInstanceOf(Error);
+			const pidMatch = (error as Error).message.match(/^([0-9]+)$/m);
+			expect(pidMatch).not.toBeNull();
+			const pid = Number(pidMatch?.[1]);
+			let alive = true;
+			try {
+				for (let i = 0; i < 20; i++) {
+					try {
+						process.kill(pid, 0);
+					} catch {
+						alive = false;
+						break;
+					}
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				expect(alive).toBe(false);
+			} finally {
+				if (alive) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {}
+				}
+			}
+		});
+
 		it("should include full output path for truncated timeout and abort errors", async () => {
 			for (const testCase of [
 				{ error: "timeout:5", expected: "Command timed out after 5 seconds" },
