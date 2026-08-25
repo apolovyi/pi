@@ -1,6 +1,48 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const ambientProviderTestEnv = [
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"OPENAI_API_KEY",
+	"GEMINI_API_KEY",
+	"GROQ_API_KEY",
+	"CEREBRAS_API_KEY",
+	"XAI_API_KEY",
+	"OPENROUTER_API_KEY",
+	"ZAI_API_KEY",
+	"MISTRAL_API_KEY",
+	"MINIMAX_API_KEY",
+	"MINIMAX_CN_API_KEY",
+	"AI_GATEWAY_API_KEY",
+	"OPENCODE_API_KEY",
+	"COPILOT_GITHUB_TOKEN",
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"HF_TOKEN",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"GOOGLE_CLOUD_PROJECT",
+	"GCLOUD_PROJECT",
+	"GOOGLE_CLOUD_LOCATION",
+	"AWS_PROFILE",
+	"AWS_ACCESS_KEY_ID",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SESSION_TOKEN",
+	"AWS_REGION",
+	"AWS_DEFAULT_REGION",
+	"AWS_BEARER_TOKEN_BEDROCK",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AZURE_OPENAI_API_KEY",
+	"AZURE_OPENAI_BASE_URL",
+	"AZURE_OPENAI_RESOURCE_NAME",
+] as const;
+
+export function clearAmbientProviderTestEnv(): void {
+	for (const name of ambientProviderTestEnv) delete process.env[name];
+}
+
 export const workspaceSourcePaths = {
 	chordIndex: fileURLToPath(new URL("./packages/chord/src/index.ts", import.meta.url)),
 	chordContext: fileURLToPath(new URL("./packages/chord/src/context/index.ts", import.meta.url)),

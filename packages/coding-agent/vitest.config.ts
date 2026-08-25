@@ -1,5 +1,7 @@
 import { defineConfig, mergeConfig } from "vitest/config";
-import baseConfig, { workspaceSourcePaths } from "../../vitest.base.ts";
+import baseConfig, { clearAmbientProviderTestEnv, workspaceSourcePaths } from "../../vitest.base.ts";
+
+clearAmbientProviderTestEnv();
 
 export default mergeConfig(
 	baseConfig,

@@ -1,5 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { clearAmbientProviderTestEnv } from "../../vitest.base.ts";
+
+clearAmbientProviderTestEnv();
 
 const telemetrySrcIndex = fileURLToPath(new URL("../telemetry/src/index.ts", import.meta.url));
 
