@@ -649,9 +649,23 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	private _terminatingToolCallIds = new Set<string>();
+	private _lastTurnTerminated = false;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "turn_start") {
+			this._terminatingToolCallIds.clear();
+			this._lastTurnTerminated = false;
+		} else if (event.type === "tool_execution_end" && event.result?.terminate === true) {
+			this._terminatingToolCallIds.add(event.toolCallId);
+		} else if (event.type === "turn_end") {
+			this._lastTurnTerminated =
+				event.toolResults.length > 0 &&
+				event.toolResults.every((result) => this._terminatingToolCallIds.has(result.toolCallId));
+			this._terminatingToolCallIds.clear();
+		}
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1175,7 +1189,9 @@ export class AgentSession {
 
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
+		const terminatedByTool = this._lastTurnTerminated;
 		this._lastAssistantMessage = undefined;
+		this._lastTurnTerminated = false;
 		if (!msg) {
 			return false;
 		}
@@ -1194,7 +1210,7 @@ export class AgentSession {
 			this._retryAttempt = 0;
 		}
 
-		if (await this._checkCompaction(msg)) {
+		if (!terminatedByTool && (await this._checkCompaction(msg))) {
 			return true;
 		}
 
