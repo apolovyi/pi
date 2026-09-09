@@ -83,16 +83,6 @@ function emitReftableChange(provider: FooterDataProvider): void {
 	reftableWatcher?.emit("change", "change", "tables.list");
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 10000): Promise<void> {
-	const startedAt = Date.now();
-	while (!condition()) {
-		if (Date.now() - startedAt > timeoutMs) {
-			throw new Error("Timed out waiting for condition");
-		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-}
-
 describe("FooterDataProvider reftable branch detection", () => {
 	let originalCwd: string;
 	let tempDir: string;
@@ -173,7 +163,6 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
-	// Drive debounce behavior explicitly; native fs.watch delivery can race watcher startup.
 	it("does not notify listeners when reftable updates keep the same branch", async () => {
 		vi.useFakeTimers();
 		const { worktreeDir } = createReftableWorktree(tempDir);
@@ -224,8 +213,9 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
-	it("updates the cached branch when the reftable directory changes", async () => {
-		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
+	it("reconciles the cached branch after reftable watcher startup", async () => {
+		vi.useFakeTimers();
+		const { worktreeDir } = createReftableWorktree(tempDir);
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
@@ -235,15 +225,14 @@ describe("FooterDataProvider reftable branch detection", () => {
 			const onBranchChange = vi.fn();
 			provider.onBranchChange(onBranchChange);
 
-			writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
-			await waitFor(() => provider.getGitBranch() === "foo");
+			await vi.advanceTimersByTimeAsync(501);
 
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			expect(provider.getGitBranch()).toBe("foo");
 			expect(onBranchChange).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();
+			vi.useRealTimers();
 		}
 	});
 

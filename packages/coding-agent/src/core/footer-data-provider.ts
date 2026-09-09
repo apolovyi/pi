@@ -339,8 +339,6 @@ export class FooterDataProvider {
 			return;
 		}
 
-		// In reftable repos, branch switches update files in the reftable directory
-		// instead of HEAD. Watch it separately so the footer picks up those changes.
 		const reftableDir = join(this.gitPaths.commonGitDir, "reftable");
 		if (existsSync(reftableDir)) {
 			this.reftableWatcher = watchWithErrorHandler(
@@ -377,6 +375,7 @@ export class FooterDataProvider {
 					}
 				});
 			}
+			this.scheduleRefresh();
 		}
 	}
 }
