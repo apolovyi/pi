@@ -1,6 +1,9 @@
-import { type ChildProcess, execSync, spawn } from "child_process";
+import { type ChildProcess, execFileSync, spawn } from "child_process";
+import { once } from "events";
 import { readFileSync } from "fs";
+import { createServer } from "net";
 import { dirname, join } from "path";
+import { setTimeout as delay } from "timers/promises";
 import { Type } from "typebox";
 import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1617,63 +1620,75 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	// Check if ollama is installed and local LLM tests are enabled
-	let ollamaInstalled = false;
-	if (!process.env.PI_NO_LOCAL_LLM) {
-		try {
-			execSync("which ollama", { stdio: "ignore" });
-			ollamaInstalled = true;
-		} catch {
-			ollamaInstalled = false;
+	const ollamaE2EEnabled = process.env.PI_OLLAMA_E2E === "1";
+	const ollamaTestOptions = { retry: 1, timeout: 120000 };
+
+	async function findAvailableLoopbackPort(): Promise<number> {
+		const server = createServer();
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(0, "127.0.0.1", resolve);
+		});
+		const address = server.address();
+		if (address === null || typeof address === "string") {
+			server.close();
+			throw new Error("[ollama-e2e] Failed to allocate a loopback port. Check local network permissions and retry.");
 		}
+		await new Promise<void>((resolve, reject) => {
+			server.close((error) => (error ? reject(error) : resolve()));
+		});
+		return address.port;
 	}
 
-	describe.skipIf(!ollamaInstalled)("Ollama Provider (gpt-oss-20b via OpenAI Completions)", () => {
+	async function waitForOllamaServer(host: string, process: ChildProcess): Promise<void> {
+		const deadline = Date.now() + 30000;
+		let lastFailure = "server did not respond";
+		while (Date.now() < deadline) {
+			if (process.exitCode !== null || process.signalCode !== null) {
+				const outcome = process.exitCode === null ? `signal ${process.signalCode}` : `code ${process.exitCode}`;
+				throw new Error(`[ollama-e2e] Isolated server exited with ${outcome}. Check Ollama logs and retry.`);
+			}
+			try {
+				const response = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(1000) });
+				if (response.ok) return;
+				lastFailure = `HTTP ${response.status}`;
+			} catch (error) {
+				lastFailure = error instanceof Error ? error.message : String(error);
+			}
+			await delay(250);
+		}
+		throw new Error(
+			`[ollama-e2e] Isolated server was not ready after 30 seconds: ${lastFailure}. Check Ollama logs and retry.`,
+		);
+	}
+
+	describe.skipIf(!ollamaE2EEnabled)("Ollama Provider (gpt-oss-20b via OpenAI Completions)", () => {
 		let llm: Model<"openai-completions">;
 		let ollamaProcess: ChildProcess | null = null;
 
 		beforeAll(async () => {
-			// Check if model is available, if not pull it
-			try {
-				execSync("ollama list | grep -q 'gpt-oss:20b'", { stdio: "ignore" });
-			} catch {
-				console.log("Pulling gpt-oss:20b model for Ollama tests...");
-				try {
-					execSync("ollama pull gpt-oss:20b", { stdio: "inherit" });
-				} catch (_e) {
-					console.warn("Failed to pull gpt-oss:20b model, tests will be skipped");
-					return;
-				}
-			}
-
-			// Start ollama server
+			const ollamaHost = `http://127.0.0.1:${await findAvailableLoopbackPort()}`;
+			const ollamaEnv = { ...process.env, OLLAMA_HOST: ollamaHost };
 			ollamaProcess = spawn("ollama", ["serve"], {
 				detached: false,
+				env: ollamaEnv,
 				stdio: "ignore",
 			});
-
-			// Wait for server to be ready
-			await new Promise<void>((resolve) => {
-				const checkServer = async () => {
-					try {
-						const response = await fetch("http://localhost:11434/api/tags");
-						if (response.ok) {
-							resolve();
-						} else {
-							setTimeout(checkServer, 500);
-						}
-					} catch {
-						setTimeout(checkServer, 500);
-					}
-				};
-				setTimeout(checkServer, 1000); // Initial delay
-			});
+			await once(ollamaProcess, "spawn");
+			await waitForOllamaServer(ollamaHost, ollamaProcess);
+			try {
+				execFileSync("ollama", ["show", "gpt-oss:20b"], { env: ollamaEnv, stdio: "ignore" });
+			} catch {
+				throw new Error(
+					"[ollama-e2e] Required model gpt-oss:20b is not installed. Run `ollama pull gpt-oss:20b` and retry with PI_OLLAMA_E2E=1.",
+				);
+			}
 
 			llm = {
 				id: "gpt-oss:20b",
 				api: "openai-completions",
 				provider: "ollama",
-				baseUrl: "http://localhost:11434/v1",
+				baseUrl: `${ollamaHost}/v1`,
 				reasoning: true,
 				input: ["text"],
 				contextWindow: 128000,
@@ -1686,33 +1701,34 @@ describe("Generate E2E Tests", () => {
 				},
 				name: "Ollama GPT-OSS 20B",
 			};
-		}, 30000); // 30 second timeout for setup
+		}, 30000);
 
-		afterAll(() => {
-			// Kill ollama server
-			if (ollamaProcess) {
+		afterAll(async () => {
+			if (ollamaProcess?.exitCode === null) {
+				const exited = once(ollamaProcess, "exit");
 				ollamaProcess.kill("SIGTERM");
-				ollamaProcess = null;
+				await Promise.race([exited, delay(5000)]);
 			}
+			ollamaProcess = null;
 		});
 
-		it("should complete basic text generation", { retry: 3 }, async () => {
+		it("should complete basic text generation", ollamaTestOptions, async () => {
 			await basicTextGeneration(llm, { apiKey: "test" });
 		});
 
-		it("should handle tool calling", { retry: 3 }, async () => {
+		it("should handle tool calling", ollamaTestOptions, async () => {
 			await handleToolCall(llm, { apiKey: "test" });
 		});
 
-		it("should handle streaming", { retry: 3 }, async () => {
+		it("should handle streaming", ollamaTestOptions, async () => {
 			await handleStreaming(llm, { apiKey: "test" });
 		});
 
-		it("should handle thinking mode", { retry: 3 }, async () => {
+		it("should handle thinking mode", ollamaTestOptions, async () => {
 			await handleThinking(llm, { apiKey: "test", reasoningEffort: "medium" });
 		});
 
-		it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
+		it("should handle multi-turn with thinking and tools", ollamaTestOptions, async () => {
 			await multiTurn(llm, { apiKey: "test", reasoningEffort: "medium" });
 		});
 	});
