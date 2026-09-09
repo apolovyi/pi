@@ -43,8 +43,10 @@ import { buildBaseOptions } from "./simple-options.ts";
 // ============================================================================
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-const CODEX_ORIGINATOR = "codex_cli";
-const CODEX_CLIENT_VERSION = "0.146.0";
+export const OPENAI_CODEX_ORIGINATOR = "codex_cli";
+export const OPENAI_CODEX_DEFAULT_CLIENT_VERSION = "0.153.4";
+export const OPENAI_CODEX_CLIENT_VERSION_OVERRIDE_HEADER = "x-codex-client-version-override";
+const CODEX_CLIENT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const JWT_CLAIM_PATH = "https://api.openai.com/auth" as const;
 const DEFAULT_MAX_RETRIES = 0;
 const BASE_DELAY_MS = 1000;
@@ -100,6 +102,25 @@ interface RequestBody {
 	[key: string]: unknown;
 }
 
+interface CodexClientIdentity {
+	originator: string;
+	version: string;
+	versionSource: "default" | "configured";
+}
+
+interface CodexRequestObservation extends CodexClientIdentity {
+	configuredTransport: string;
+	actualTransport?: "sse" | "websocket";
+	fallbackToSse: boolean;
+	websocketAttempts: number;
+	sseAttempts: number;
+	responseStatus?: number;
+	requestBytes?: number;
+	requestedServiceTier?: RequestBody["service_tier"];
+	reasoningEffort?: string;
+	startedAt: number;
+}
+
 type SuccessfulAssistantMessage = AssistantMessage & { stopReason: "stop" | "length" | "toolUse" };
 
 function assertSuccessfulOutput(output: AssistantMessage): asserts output is SuccessfulAssistantMessage {
@@ -109,6 +130,29 @@ function assertSuccessfulOutput(output: AssistantMessage): asserts output is Suc
 	if (output.stopReason === "error" || output.stopReason === "aborted") {
 		throw new Error(output.errorMessage || "An unknown error occurred");
 	}
+}
+
+function appendCodexRequestObservation(output: AssistantMessage, observation: CodexRequestObservation): void {
+	if (output.diagnostics?.some((diagnostic) => diagnostic.type === "openai_codex_request")) return;
+	appendAssistantMessageDiagnostic(output, {
+		type: "openai_codex_request",
+		timestamp: Date.now(),
+		details: {
+			clientOriginator: observation.originator,
+			clientVersion: observation.version,
+			clientVersionSource: observation.versionSource,
+			configuredTransport: observation.configuredTransport,
+			actualTransport: observation.actualTransport,
+			fallbackToSse: observation.fallbackToSse,
+			websocketAttempts: observation.websocketAttempts,
+			sseAttempts: observation.sseAttempts,
+			responseStatus: observation.responseStatus,
+			requestBytes: observation.requestBytes,
+			requestedServiceTier: observation.requestedServiceTier,
+			reasoningEffort: observation.reasoningEffort,
+			durationMs: Date.now() - observation.startedAt,
+		},
+	});
 }
 
 // ============================================================================
@@ -255,6 +299,17 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			timestamp: Date.now(),
 		};
 
+		const observation: CodexRequestObservation = {
+			originator: OPENAI_CODEX_ORIGINATOR,
+			version: OPENAI_CODEX_DEFAULT_CLIENT_VERSION,
+			versionSource: "default",
+			configuredTransport: options?.transport || "auto",
+			fallbackToSse: false,
+			websocketAttempts: 0,
+			sseAttempts: 0,
+			startedAt: Date.now(),
+		};
+
 		try {
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
@@ -274,15 +329,16 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				body = nextBody as RequestBody;
 			}
 			const websocketRequestId = codexSessionId || uuidv7();
-			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, codexSessionId);
-			const websocketHeaders = buildWebSocketHeaders(
-				model.headers,
-				options?.headers,
-				accountId,
-				apiKey,
-				websocketRequestId,
-			);
+			const baseHeaders = buildBaseCodexHeaders(model.headers, options?.headers, accountId, apiKey);
+			observation.originator = baseHeaders.identity.originator;
+			observation.version = baseHeaders.identity.version;
+			observation.versionSource = baseHeaders.identity.versionSource;
+			const sseHeaders = buildSSEHeaders(baseHeaders.headers, codexSessionId);
+			const websocketHeaders = buildWebSocketHeaders(baseHeaders.headers, websocketRequestId);
 			const bodyJson = JSON.stringify(body);
+			observation.requestBytes = new TextEncoder().encode(bodyJson).byteLength;
+			observation.requestedServiceTier = body.service_tier;
+			observation.reasoningEffort = body.reasoning?.effort;
 			const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
 			const websocketConnectTimeoutMs = normalizeTimeoutMs(options?.websocketConnectTimeoutMs);
 			const transport = options?.transport || "auto";
@@ -298,6 +354,8 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				let retriedMissingWebSocketContinuation = false;
 				while (true) {
 					websocketStarted = false;
+					observation.actualTransport = "websocket";
+					observation.websocketAttempts++;
 					try {
 						await processWebSocketStream(
 							resolveCodexWebSocketUrl(model.baseUrl),
@@ -325,6 +383,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							throw new Error("Request was aborted");
 						}
 						assertSuccessfulOutput(output);
+						appendCodexRequestObservation(output, observation);
 						stream.push({
 							type: "done",
 							reason: output.stopReason,
@@ -362,6 +421,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							throw error;
 						}
 						recordWebSocketSseFallback(cacheSessionId);
+						observation.fallbackToSse = true;
 						break;
 					}
 				}
@@ -382,6 +442,8 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
 
 			for (let attempt = 0; attempt <= maxRetries; attempt++) {
+				observation.actualTransport = "sse";
+				observation.sseAttempts++;
 				if (options?.signal?.aborted) {
 					throw new Error("Request was aborted");
 				}
@@ -397,6 +459,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							body: sseBody,
 							signal: combinedSignal.signal,
 						});
+						observation.responseStatus = response.status;
 					} catch (error) {
 						if (headerTimeoutSignal?.aborted && !options?.signal?.aborted) {
 							throw new Error(`Codex SSE response headers timed out after ${httpTimeoutMs}ms`);
@@ -473,6 +536,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 
 			assertSuccessfulOutput(output);
+			appendCodexRequestObservation(output, observation);
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -483,6 +547,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			appendCodexRequestObservation(output, observation);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1600,7 +1665,7 @@ function buildBaseCodexHeaders(
 	additionalHeaders: ProviderHeaders | undefined,
 	accountId: string,
 	token: string,
-): Headers {
+): { headers: Headers; identity: CodexClientIdentity } {
 	const headers = new Headers(initHeaders);
 	for (const [key, value] of Object.entries(additionalHeaders || {})) {
 		if (value === null) {
@@ -1609,23 +1674,27 @@ function buildBaseCodexHeaders(
 			headers.set(key, value);
 		}
 	}
+	const configuredClientVersion = headers.get(OPENAI_CODEX_CLIENT_VERSION_OVERRIDE_HEADER);
+	headers.delete(OPENAI_CODEX_CLIENT_VERSION_OVERRIDE_HEADER);
+	const clientVersion = configuredClientVersion ?? OPENAI_CODEX_DEFAULT_CLIENT_VERSION;
+	if (!CODEX_CLIENT_VERSION_PATTERN.test(clientVersion)) {
+		throw new Error(`Invalid OpenAI Codex client version: ${clientVersion}`);
+	}
+	const identity: CodexClientIdentity = {
+		originator: OPENAI_CODEX_ORIGINATOR,
+		version: clientVersion,
+		versionSource: configuredClientVersion === null ? "default" : "configured",
+	};
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
-	// The ChatGPT backend only honours `service_tier` for requests that identify as a Codex client.
-	headers.set("originator", CODEX_ORIGINATOR);
-	headers.set("version", CODEX_CLIENT_VERSION);
-	headers.set("User-Agent", getPiUserAgent().replace(/^pi /, `${CODEX_ORIGINATOR}/${CODEX_CLIENT_VERSION} `));
-	return headers;
+	headers.set("originator", identity.originator);
+	headers.set("version", identity.version);
+	headers.set("User-Agent", getPiUserAgent().replace(/^pi /, `${identity.originator}/${identity.version} `));
+	return { headers, identity };
 }
 
-function buildSSEHeaders(
-	initHeaders: Record<string, string> | undefined,
-	additionalHeaders: ProviderHeaders | undefined,
-	accountId: string,
-	token: string,
-	sessionId?: string,
-): Headers {
-	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+function buildSSEHeaders(baseHeaders: Headers, sessionId?: string): Headers {
+	const headers = new Headers(baseHeaders);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
@@ -1638,14 +1707,8 @@ function buildSSEHeaders(
 	return headers;
 }
 
-function buildWebSocketHeaders(
-	initHeaders: Record<string, string> | undefined,
-	additionalHeaders: ProviderHeaders | undefined,
-	accountId: string,
-	token: string,
-	requestId: string,
-): Headers {
-	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+function buildWebSocketHeaders(baseHeaders: Headers, requestId: string): Headers {
+	const headers = new Headers(baseHeaders);
 	headers.delete("accept");
 	headers.delete("content-type");
 	headers.delete("OpenAI-Beta");
