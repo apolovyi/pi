@@ -266,7 +266,7 @@ describe("CombinedAutocompleteProvider", () => {
 
 		test("ranks shallower same-score @ matches before deeper matches", async () => {
 			setupFolder(baseDir, {
-				dirs: ["scope/aaa/venv/lib/python3.12/site-packages/pkg/core/profile", "scope/projects"],
+				dirs: ["scope/aaa/environment/lib/python3.12/site-packages/pkg/core/profile", "scope/projects"],
 			});
 
 			const provider = new CombinedAutocompleteProvider([], baseDir, requireFdPath());
@@ -275,14 +275,14 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const values = result?.items.map((item) => item.value) ?? [];
 			assert.strictEqual(values[0], "@scope/projects/");
-			assert.ok(values.includes("@scope/aaa/venv/lib/python3.12/site-packages/pkg/core/profile/"));
+			assert.ok(values.includes("@scope/aaa/environment/lib/python3.12/site-packages/pkg/core/profile/"));
 		});
 
 		test("includes scoped direct children when recursive @ matches are flooded", async () => {
 			const floodedDirs = Array.from(
 				{ length: 250 },
 				(_, index) =>
-					`scope/a${String(index + 1).padStart(3, "0")}/venv/lib/python3.12/site-packages/pkg/core/profile`,
+					`scope/a${String(index + 1).padStart(3, "0")}/environment/lib/python3.12/site-packages/pkg/core/profile`,
 			);
 			setupFolder(baseDir, {
 				dirs: ["scope/projects", ...floodedDirs],
