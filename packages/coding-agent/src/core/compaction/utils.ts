@@ -85,25 +85,35 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 // Message Serialization
 // ============================================================================
 
-/** Maximum characters for a tool result in serialized summaries. */
 const TOOL_RESULT_MAX_CHARS = 2000;
+const TOOL_DIAGNOSTIC_MAX_CHARS = 500;
 
 function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
 	const headChars = Math.ceil(maxChars / 2);
 	const tailChars = maxChars - headChars;
 	const omittedChars = text.length - maxChars;
-	return `${text.slice(0, headChars)}\n\n[... ${omittedChars} characters omitted from middle]\n\n${text.slice(-tailChars)}`;
+	const selectedLines: string[] = [];
+	let selectedChars = 0;
+	for (const line of text.slice(headChars, -tailChars).split("\n").slice(1, -1)) {
+		if (
+			!/^\s*(?:FAIL(?:ED)?\b|ERROR\b|AssertionError:|PASS(?:ED)?\b|\d+ (?:passed|failed)\b|Full output:|Evidence:)/i.test(
+				line,
+			)
+		)
+			continue;
+		const addedChars = line.length + (selectedLines.length > 0 ? 1 : 0);
+		if (selectedLines.includes(line) || selectedChars + addedChars > TOOL_DIAGNOSTIC_MAX_CHARS) continue;
+		selectedLines.push(line);
+		selectedChars += addedChars;
+	}
+	const diagnostics =
+		selectedLines.length > 0
+			? `\n\n[Selected diagnostic/reference lines from omitted middle]:\n${selectedLines.join("\n")}`
+			: "";
+	return `${text.slice(0, headChars)}\n\n[... ${omittedChars} characters omitted from middle]${diagnostics}\n\n${text.slice(-tailChars)}`;
 }
 
-/**
- * Serialize LLM messages to text for summarization.
- * This prevents the model from treating it as a conversation to continue.
- * Call convertToLlm() first to handle custom message types.
- *
- * Tool results are truncated to keep the summarization request within
- * reasonable token budgets. Full content is not needed for summarization.
- */
 export function serializeConversation(messages: Message[]): string {
 	const parts: string[] = [];
 
@@ -123,7 +133,7 @@ export function serializeConversation(messages: Message[]): string {
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
 						.join(", ");
-					toolCalls.push(`${block.name}(${argsStr})`);
+					toolCalls.push(`call=${JSON.stringify(block.id)} ${block.name}(${argsStr})`);
 				}
 			}
 
@@ -138,9 +148,9 @@ export function serializeConversation(messages: Message[]): string {
 			}
 		} else if (msg.role === "toolResult") {
 			const content = contentText(msg.content, "");
-			if (content) {
-				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
-			}
+			parts.push(
+				`[Tool result name=${JSON.stringify(msg.toolName)} call=${JSON.stringify(msg.toolCallId)} isError=${msg.isError}]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`,
+			);
 		}
 	}
 

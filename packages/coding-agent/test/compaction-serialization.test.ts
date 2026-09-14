@@ -20,8 +20,10 @@ describe("serializeConversation", () => {
 
 		const result = serializeConversation(messages);
 
-		expect(result).toContain("[Tool result]:");
-		expect(result).toBe(`[Tool result]: ${beginning}\n\n[... 3000 characters omitted from middle]\n\n${ending}`);
+		expect(result).toContain('[Tool result name="read" call="tc1" isError=false]:');
+		expect(result).toBe(
+			`[Tool result name="read" call="tc1" isError=false]: ${beginning}\n\n[... 3000 characters omitted from middle]\n\n${ending}`,
+		);
 		expect(result).not.toContain("x");
 	});
 
@@ -40,8 +42,74 @@ describe("serializeConversation", () => {
 
 		const result = serializeConversation(messages);
 
-		expect(result).toBe(`[Tool result]: ${shortContent}`);
+		expect(result).toBe(`[Tool result name="read" call="tc1" isError=false]: ${shortContent}`);
 		expect(result).not.toContain("truncated");
+	});
+
+	it("retains bounded diagnostic and evidence lines from the omitted middle", () => {
+		const evidence =
+			"FAILED tests/payment.test.ts::reject_duplicate\nAssertionError: duplicate charge accepted\nFull output: /repo/.tmp/payment-verification.log";
+		const result = serializeConversation([
+			{
+				role: "toolResult",
+				toolName: "bash",
+				toolCallId: "tc2",
+				isError: true,
+				timestamp: 1,
+				content: [{ type: "text", text: "a".repeat(1500) + "\n" + evidence + "\n" + "z".repeat(1500) }],
+			},
+		]);
+		expect(result).toContain('[Tool result name="bash" call="tc2" isError=true]:');
+		expect(result).toContain("[Selected diagnostic/reference lines from omitted middle]:");
+		expect(result).toContain(evidence);
+	});
+
+	it("keeps diagnostic excerpts bounded without slicing evidence paths", () => {
+		const evidence = "Full output: /repo/.tmp/verifier.log";
+		const result = serializeConversation([
+			{
+				role: "toolResult",
+				toolName: "bash",
+				toolCallId: "tc3",
+				isError: true,
+				timestamp: 1,
+				content: [
+					{
+						type: "text",
+						text:
+							"a".repeat(1500) +
+							"\nERROR: " +
+							"x".repeat(600) +
+							"\n" +
+							evidence +
+							"\n" +
+							Array.from({ length: 100 }, (_, index) => `FAILED test_${index}\n`).join("") +
+							"z".repeat(1500),
+					},
+				],
+			},
+		]);
+		const selected = result
+			.split("[Selected diagnostic/reference lines from omitted middle]:\n")[1]
+			?.split("\n\n")[0];
+		expect(selected).toBeDefined();
+		expect(selected!.length).toBeLessThanOrEqual(500);
+		expect(selected).toContain(evidence);
+		expect(selected).not.toContain("ERROR:");
+	});
+
+	it("retains an empty tool failure instead of dropping it", () => {
+		const result = serializeConversation([
+			{
+				role: "toolResult",
+				toolName: "bash",
+				toolCallId: "tc4",
+				isError: true,
+				timestamp: 1,
+				content: [],
+			},
+		]);
+		expect(result).toBe('[Tool result name="bash" call="tc4" isError=true]: ');
 	});
 
 	it("should not truncate assistant or user messages", () => {

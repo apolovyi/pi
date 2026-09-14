@@ -116,18 +116,24 @@ Set `PI_SKIP_VERSION_CHECK=1` to disable the Pi version update check. Use `--off
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
+| `compaction.reserveTokens` | number | `16384` | Trigger headroom below the context window, independent of summary output budgets |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.summaryMaxTokens` | number | `13107` | Positive safe integer history-summary output budget, capped by the model output limit |
+| `compaction.turnPrefixMaxTokens` | number | `8192` | Positive safe integer split-turn-prefix output budget, capped by the model output limit |
 
 ```json
 {
   "compaction": {
     "enabled": true,
     "reserveTokens": 16384,
-    "keepRecentTokens": 20000
+    "keepRecentTokens": 20000,
+    "summaryMaxTokens": 13107,
+    "turnPrefixMaxTokens": 8192
   }
 }
 ```
+
+Summary budgets are passed as provider `maxTokens` options. They are not hard limits for providers without output-cap support. The OpenAI Codex adapter does not send an output-token cap; a live synthetic request on 2026-09-14 confirmed that its authenticated backend rejected `max_output_tokens` as unsupported. Do not tune these settings expecting Codex cost or latency changes.
 
 ### Branch Summary
 

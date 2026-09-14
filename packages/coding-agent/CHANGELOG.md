@@ -2,17 +2,25 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `generateSummary()` and `generateSummaryWithUsage()` now take a summary output-token budget as their third argument, instead of deriving it from the trigger reserve.
+
 ### Added
 
+- Added independent `compaction.summaryMaxTokens` and `compaction.turnPrefixMaxTokens` settings; providers without output-cap support do not enforce them.
 - Added `ctx.modelRegistry.stream()` and `streamSimple()` for extension model calls through configured providers with resolved authentication ([#8964](https://github.com/earendil-works/pi/issues/8964)).
 
 ### Changed
 
+- Compaction summaries prioritize explicit user corrections and retain tool execution status, call IDs, output beginnings/endings, and bounded middle diagnostics and evidence references.
 - Moved compaction, branch summarization, and retry spinners into the editor border alongside the working indicator. Custom editors use the same embedding opt-in for all status spinners.
 - Enabled strict-prefer JSON-schema sampling by default for built-in `read`, `bash`, `powershell`, `edit`, and `write` tools, without requiring `PI_EXPERIMENTAL`. Extensions can re-register tool definitions with `constrainedSampling: false`.
 
 ### Fixed
 
+- Fixed repeated split-turn compaction discarding the previous summary and automatic compaction bypassing cooldown between responses.
+- Fixed expired compaction cooldowns renewing indefinitely after repeated failures, and successful manual recovery failing to clear automatic-compaction failure state.
 - Fixed shell tools overriding inherited executable precedence when adding Pi's fallback tools to `PATH`.
 - Fixed extension boolean CLI flags consuming positional prompts or treating `=false` as true. Flags are parsed against loaded extension definitions, and invalid values fail before prompting.
 - Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).

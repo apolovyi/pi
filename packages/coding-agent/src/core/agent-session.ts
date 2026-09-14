@@ -1143,10 +1143,6 @@ export class AgentSession {
 			const seconds = Math.ceil((this._autoCompactionCooldownUntil - now) / 1000);
 			return `Auto-compaction skipped: recent compactions were ineffective or failed. Cooldown ends in ${seconds}s. Try /compact for a manual retry or /new to start fresh.`;
 		}
-		if (this._ineffectiveAutoCompactionCount >= MAX_INEFFECTIVE_AUTO_COMPACTIONS) {
-			this._autoCompactionCooldownUntil = now + AUTO_COMPACTION_COOLDOWN_MS;
-			return `Auto-compaction skipped: last ${this._ineffectiveAutoCompactionCount} compactions each saved less than ${INEFFECTIVE_COMPACTION_SAVINGS_PERCENT}%. Try /compact for a manual retry or /new to start fresh.`;
-		}
 		return undefined;
 	}
 
@@ -2130,8 +2126,8 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
-
-			// Get the saved compaction entry for the extension event
+			this._ineffectiveAutoCompactionCount = 0;
+			this._autoCompactionCooldownUntil = 0;
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
 				| CompactionEntry
 				| undefined;

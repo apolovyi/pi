@@ -38,6 +38,8 @@ During a multi-turn agent run, Pi checks this threshold after tools finish and t
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
+A failed automatic attempt pauses automatic compaction for 30 seconds; two ineffective compactions also start this cooldown. Expiry permits another attempt instead of renewing the cooldown indefinitely. Successful manual compaction clears failure history and cooldown; a failed manual retry does not.
+
 ### How It Works
 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`) is reached
@@ -270,7 +272,9 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 This prevents the model from treating it as a conversation to continue.
 
-Tool results longer than 2000 characters retain the first 1000 and last 1000 characters during serialization, with a marker identifying the omitted middle. This preserves command context and final verdicts within the same content budget. Shorter results and user messages are retained in full; facts found only in an omitted middle still require re-reading the original artifact.
+Tool results retain their tool name, call ID, and protocol `isError` flag, even when their text is empty. Assistant tool calls retain matching IDs. The flag describes tool execution, not whether the task or a particular verification passed.
+
+Results longer than 2000 characters retain the first 1000 and last 1000 characters, plus up to 500 additional characters of complete diagnostic/reference lines from the middle. Selection recognizes failure/error/pass labels, test-count verdicts, and `Full output:` or `Evidence:` references. Duplicate lines and lines that cannot fit intact are skipped. These are literal excerpts, not independently verified verdicts, and unrecognized or excess middle content still requires re-reading the original artifact. Shorter results and user messages remain untruncated.
 
 ## Custom Summarization via Extensions
 

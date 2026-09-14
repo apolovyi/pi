@@ -15,6 +15,7 @@ import { estimateTokens } from "../../src/core/compaction/index.ts";
 import { createHarness, getAssistantTexts, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
+	_getAutoCompactionCooldownMessage: () => string | undefined;
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
@@ -1094,6 +1095,59 @@ describe("AgentSession compaction characterization", () => {
 			reason: "overflow",
 			errorMessage: skippedEvent?.errorMessage,
 		});
+	});
+
+	it("allows one automatic retry after each expired failure cooldown", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+		let requests = 0;
+		useSummaryStreamFn(harness, "Recovered", () => {
+			requests++;
+			if (requests <= 2) throw new Error("synthetic summary failure");
+		});
+
+		await internals._runAutoCompaction("threshold", false);
+		await internals._runAutoCompaction("threshold", false);
+		expect(requests).toBe(1);
+		now += 30001;
+		await internals._runAutoCompaction("threshold", false);
+		expect(requests).toBe(2);
+		await internals._runAutoCompaction("threshold", false);
+		expect(requests).toBe(2);
+		now += 30001;
+		await internals._runAutoCompaction("threshold", false);
+		expect(requests).toBe(3);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
+	it.each([true, false])("clears failure cooldown only when manual recovery succeeds: %s", async (succeeds) => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+		let requests = 0;
+		useSummaryStreamFn(harness, "Recovered", () => {
+			requests++;
+			if (requests <= 2 || !succeeds) throw new Error("synthetic summary failure");
+		});
+		await internals._runAutoCompaction("threshold", false);
+		now += 30001;
+		await internals._runAutoCompaction("threshold", false);
+		expect(internals._getAutoCompactionCooldownMessage()).toContain("Cooldown ends");
+
+		if (succeeds) {
+			await harness.session.compact();
+			expect(internals._getAutoCompactionCooldownMessage()).toBeUndefined();
+		} else {
+			await expect(harness.session.compact()).rejects.toThrow("synthetic summary failure");
+			expect(internals._getAutoCompactionCooldownMessage()).toContain("Cooldown ends");
+		}
 	});
 
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {
