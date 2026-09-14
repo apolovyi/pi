@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Fixed shell tools overriding inherited executable precedence when adding Pi's fallback tools to `PATH`.
 - Fixed extension boolean CLI flags consuming positional prompts or treating `=false` as true. Flags are parsed against loaded extension definitions, and invalid values fail before prompting.
 - Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).
 - Fixed premature missing-model errors after login by waiting for catalog discovery. Radius now defaults to `balanced`, falling back to the first available Radius model when needed.

@@ -191,6 +191,10 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 
 ### Shell
 
+Shell tools preserve the inherited `PATH` order. Pi appends its tools directory (`~/.pi/agent/bin` by default) as a fallback when it is absent; an existing entry keeps its position and is not duplicated. The parent process environment is unchanged.
+
+A launcher that selects managed runtime shims must put them first in its inherited `PATH`. Pi's fallback tools must not displace that selection. This controls child command lookup, not the executable already running Pi. Built-in `find` and `grep` resolve their `fd` and `rg` paths separately; they do not require Pi's tools directory to lead the shell `PATH`.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows); supports a leading `~` for the home directory |
