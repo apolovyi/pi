@@ -98,8 +98,7 @@ async function readPipedStdin(): Promise<string | undefined> {
 function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
 	for (const diagnostic of diagnostics) {
 		const color = diagnostic.type === "error" ? chalk.red : diagnostic.type === "warning" ? chalk.yellow : chalk.dim;
-		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
-		console.error(color(`${prefix}${diagnostic.message}`));
+		console.error(color(`[${APP_NAME}] ${diagnostic.message}`));
 	}
 }
 
@@ -606,15 +605,10 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	const parsed = parseArgs(args);
-	if (parsed.diagnostics.length > 0) {
-		for (const d of parsed.diagnostics) {
-			const color = d.type === "error" ? chalk.red : chalk.yellow;
-			console.error(color(`${d.type === "error" ? "Error" : "Warning"}: ${d.message}`));
-		}
-		if (parsed.diagnostics.some((d) => d.type === "error")) {
-			process.exit(1);
-		}
+	let parsed = parseArgs(args);
+	if (parsed.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+		reportDiagnostics(parsed.diagnostics);
+		process.exit(1);
 	}
 	time("parseArgs");
 
@@ -740,7 +734,6 @@ export async function main(args: string[], options?: MainOptions) {
 			agentDir,
 			settingsManager: runtimeSettingsManager,
 			modelRuntimeSignal: AbortSignal.timeout(15_000),
-			extensionFlagValues: parsed.unknownFlags,
 			resourceLoaderReloadOptions: shouldResolveProjectTrust
 				? {
 						resolveProjectTrust: async ({ extensionsResult }) => {
@@ -781,7 +774,18 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		const extensionsResult = resourceLoader.getExtensions();
+		const extensionFlags = new Map(extensionsResult.extensions.flatMap((extension) => [...extension.flags]));
+		parsed = parseArgs(args, extensionFlags);
+		if (isInitialRuntime && parsed.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+			reportDiagnostics(parsed.diagnostics);
+			process.exit(2);
+		}
+		for (const [name, value] of parsed.unknownFlags) {
+			extensionsResult.runtime.flagValues.set(name, value);
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
+			...parsed.diagnostics,
 			...projectTrustDiagnostics,
 			...services.diagnostics,
 			...collectSettingsDiagnostics(settingsManager),

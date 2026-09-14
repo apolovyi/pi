@@ -476,6 +476,85 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("registered extension flags", () => {
+		const flags = new Map<string, { type: "boolean" | "string" }>([
+			["fast", { type: "boolean" }],
+			["preset", { type: "string" }],
+		]);
+
+		test.each([
+			["--fast", true],
+			["--fast=true", true],
+			["--fast=false", false],
+		] as const)("parses %s without consuming a prompt", (flag, expected) => {
+			const result = parseArgs(["before", flag, "explain this", "@notes.md", "after"], flags);
+			expect(result.unknownFlags.get("fast")).toBe(expected);
+			expect(result.messages).toEqual(["before", "explain this", "after"]);
+			expect(result.fileArgs).toEqual(["notes.md"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test.each(["", "no", "off", "0", "TRUE", "flase"])("rejects invalid boolean value %j", (value) => {
+			const result = parseArgs([`--fast=${value}`, "prompt"], flags);
+			expect(result.unknownFlags.has("fast")).toBe(false);
+			expect(result.messages).toEqual(["prompt"]);
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "Invalid value for --fast. Use --fast, --fast=true, or --fast=false." },
+			]);
+		});
+
+		test("keeps separate boolean-looking words as prompt text", () => {
+			const result = parseArgs(["--fast", "false"], flags);
+			expect(result.unknownFlags.get("fast")).toBe(true);
+			expect(result.messages).toEqual(["false"]);
+		});
+
+		test("leaves omitted flags to their registered defaults", () => {
+			expect(parseArgs(["prompt"], flags).unknownFlags.size).toBe(0);
+		});
+
+		test("uses the last explicit boolean value", () => {
+			expect(parseArgs(["--fast", "--fast=false"], flags).unknownFlags.get("fast")).toBe(false);
+			expect(parseArgs(["--fast=false", "--fast"], flags).unknownFlags.get("fast")).toBe(true);
+		});
+
+		test.each([["--preset", "review"], ["--preset=review"]])("parses string flag %j", (...argv) => {
+			const result = parseArgs([...argv, "--fast", "prompt"], flags);
+			expect(result.unknownFlags.get("preset")).toBe("review");
+			expect(result.unknownFlags.get("fast")).toBe(true);
+			expect(result.messages).toEqual(["prompt"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("accepts attached string values without interpreting their contents", () => {
+			for (const value of ["", "false", "--fast", "@preset.json", "a=b"]) {
+				expect(parseArgs([`--preset=${value}`], flags).unknownFlags.get("preset")).toBe(value);
+			}
+		});
+
+		test.each([[], ["--fast"], ["--"], ["@notes.md"]])("rejects a missing string value before %j", (...rest) => {
+			const result = parseArgs(["--preset", ...rest], flags);
+			expect(result.unknownFlags.has("preset")).toBe(false);
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "Extension flag --preset requires a value. Use --preset=<value>." },
+			]);
+		});
+
+		test("rejects options not registered by the loaded extensions", () => {
+			const result = parseArgs(["--unknown", "prompt"], flags);
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "Unknown option --unknown. Use pi --help to list available options." },
+			]);
+		});
+
+		test("retains end-of-options semantics after discovery", () => {
+			const result = parseArgs(["--fast=false", "--", "--fast", "--preset", "@notes.md"], flags);
+			expect(result.unknownFlags.get("fast")).toBe(false);
+			expect(result.messages).toEqual(["--fast", "--preset"]);
+			expect(result.fileArgs).toEqual(["notes.md"]);
+		});
+	});
+
 	describe("complex combinations", () => {
 		test("parses multiple flags together", () => {
 			const result = parseArgs([

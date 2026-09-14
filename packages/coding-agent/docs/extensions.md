@@ -1656,7 +1656,7 @@ pi.registerShortcut("ctrl+shift+p", {
 
 ### pi.registerFlag(name, options)
 
-Register a CLI flag.
+Register a CLI flag. Boolean flags accept `--flag`, `--flag=true`, and `--flag=false`; bare flags do not consume the next argument. String flags accept `--flag value` or `--flag=value`. Use `=` for string values starting with `-` or `@`. Invalid boolean values and missing string values are CLI errors. Omitted flags retain their registered defaults, and repeated flags use the last supplied value.
 
 ```typescript
 pi.registerFlag("plan", {

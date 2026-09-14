@@ -1,7 +1,3 @@
-/**
- * CLI argument parsing and help display
- */
-
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
@@ -52,7 +48,6 @@ export interface Args {
 	projectTrustOverride?: boolean;
 	messages: string[];
 	fileArgs: string[];
-	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
@@ -68,7 +63,7 @@ export function normalizeSessionName(value: string): string | undefined {
 	return name.length > 0 ? name : undefined;
 }
 
-export function parseArgs(args: string[]): Args {
+export function parseArgs(args: string[], extensionFlags?: ReadonlyMap<string, Pick<ExtensionFlag, "type">>): Args {
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -194,7 +189,6 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--no-context-files" || arg === "-nc") {
 			result.noContextFiles = true;
 		} else if (arg === "--list-models") {
-			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
 				result.listModels = args[++i];
 			} else {
@@ -223,17 +217,38 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--offline") {
 			result.offline = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			result.fileArgs.push(arg.slice(1));
 		} else if (arg.startsWith("--")) {
 			const eqIndex = arg.indexOf("=");
-			if (eqIndex !== -1) {
-				result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
+			const flagName = eqIndex === -1 ? arg.slice(2) : arg.slice(2, eqIndex);
+			const flag = extensionFlags?.get(flagName);
+			const attachedValue = eqIndex === -1 ? undefined : arg.slice(eqIndex + 1);
+			if (extensionFlags && !flag) {
+				result.diagnostics.push({
+					type: "error",
+					message: `Unknown option --${flagName}. Use ${APP_NAME} --help to list available options.`,
+				});
+			} else if (flag?.type === "boolean") {
+				if (attachedValue === undefined || attachedValue === "true" || attachedValue === "false") {
+					result.unknownFlags.set(flagName, attachedValue !== "false");
+				} else {
+					result.diagnostics.push({
+						type: "error",
+						message: `Invalid value for --${flagName}. Use --${flagName}, --${flagName}=true, or --${flagName}=false.`,
+					});
+				}
+			} else if (attachedValue !== undefined) {
+				result.unknownFlags.set(flagName, attachedValue);
 			} else {
-				const flagName = arg.slice(2);
 				const next = args[i + 1];
 				if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
 					result.unknownFlags.set(flagName, next);
 					i++;
+				} else if (flag?.type === "string") {
+					result.diagnostics.push({
+						type: "error",
+						message: `Extension flag --${flagName} requires a value. Use --${flagName}=<value>.`,
+					});
 				} else {
 					result.unknownFlags.set(flagName, true);
 				}
@@ -253,7 +268,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
 					.map((flag) => {
-						const value = flag.type === "string" ? " <value>" : "";
+						const value = flag.type === "string" ? " <value>" : "[=true|false]";
 						const description = flag.description ?? `Registered by ${flag.extensionPath}`;
 						return `  --${flag.name}${value}`.padEnd(30) + description;
 					})
