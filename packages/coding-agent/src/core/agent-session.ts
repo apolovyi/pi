@@ -2345,18 +2345,6 @@ export class AgentSession {
 			contextTokens = Math.max(directContextTokens, estimate.tokens);
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			const cooldownMessage = this._getAutoCompactionCooldownMessage();
-			if (cooldownMessage) {
-				this._emit({
-					type: "compaction_end",
-					reason: "threshold",
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					errorMessage: cooldownMessage,
-				});
-				return false;
-			}
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
@@ -2373,6 +2361,18 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		const cooldownMessage = this._getAutoCompactionCooldownMessage();
+		if (cooldownMessage) {
+			this._emit({
+				type: "compaction_end",
+				reason,
+				result: undefined,
+				aborted: false,
+				willRetry: false,
+				errorMessage: cooldownMessage,
+			});
+			return false;
+		}
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 		let fromExtension = false;

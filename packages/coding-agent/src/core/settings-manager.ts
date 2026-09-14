@@ -8,12 +8,15 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import { DEFAULT_COMPACTION_SETTINGS } from "./compaction/compaction.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
-	enabled?: boolean; // default: true
-	reserveTokens?: number; // default: 16384
-	keepRecentTokens?: number; // default: 20000
+	enabled?: boolean;
+	reserveTokens?: number;
+	keepRecentTokens?: number;
+	summaryMaxTokens?: number;
+	turnPrefixMaxTokens?: number;
 }
 
 export interface BranchSummarySettings {
@@ -847,11 +850,22 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionSettings(): Required<CompactionSettings> {
+		const {
+			summaryMaxTokens = DEFAULT_COMPACTION_SETTINGS.summaryMaxTokens,
+			turnPrefixMaxTokens = DEFAULT_COMPACTION_SETTINGS.turnPrefixMaxTokens,
+		} = this.settings.compaction ?? {};
+		for (const [name, value] of Object.entries({ summaryMaxTokens, turnPrefixMaxTokens })) {
+			if (!Number.isSafeInteger(value) || value <= 0) {
+				throw new Error(`Invalid compaction.${name}: expected a positive safe integer`);
+			}
+		}
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			summaryMaxTokens,
+			turnPrefixMaxTokens,
 		};
 	}
 

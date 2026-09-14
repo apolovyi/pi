@@ -481,6 +481,53 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.getLastAssistantText()).toBe("finished after compaction");
 	});
 
+	it("honors a failed-compaction cooldown across tool batches in the same run", async () => {
+		const largeTool: AgentTool = {
+			name: "large_result",
+			label: "Large result",
+			description: "Returns enough content to cross the compaction threshold",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "x".repeat(6800) }], details: {} }),
+		};
+		let compactionAttempts = 0;
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
+			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			tools: [largeTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", () => {
+						compactionAttempts++;
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("a".repeat(800)),
+			fauxAssistantMessage("b".repeat(800)),
+			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "synthetic summary failure" }),
+			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("finished without another compaction attempt"),
+		]);
+
+		await harness.session.prompt("seed old history");
+		await harness.session.prompt("seed recent history");
+		await harness.session.prompt("run both tools");
+
+		expect(compactionAttempts).toBe(1);
+		expect(harness.eventsOfType("compaction_start")).toHaveLength(1);
+		expect(harness.eventsOfType("compaction_end")).toContainEqual(
+			expect.objectContaining({
+				reason: "threshold",
+				willRetry: false,
+				errorMessage: expect.stringContaining("Cooldown ends"),
+			}),
+		);
+		expect(harness.session.getLastAssistantText()).toBe("finished without another compaction attempt");
+	});
+
 	it("includes steering queued during compaction in the resumed assistant request", async () => {
 		const largeTool: AgentTool = {
 			name: "large_result",

@@ -32,7 +32,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindow - reserveTokens
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response.
+By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This is trigger headroom, independent of the recent-history and summary-output budgets. `summaryMaxTokens` defaults to 13107 for history summaries and `turnPrefixMaxTokens` defaults to 8192 for split-turn prefix summaries. Both are positive safe integers, capped by the model output limit, and passed as provider `maxTokens` options; providers without output-cap support do not enforce them.
 
 During a multi-turn agent run, Pi checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks the threshold before a new user prompt and after a low-level agent run ends.
 
@@ -108,6 +108,8 @@ For split turns, Pi generates two summaries and merges them:
 1. **History summary**: Previous context (if any)
 2. **Turn prefix summary**: The early part of the split turn
 
+If no complete history messages need summarizing, the previous summary is retained verbatim rather than discarded. Summary prompts preserve explicit user corrections and distinguish approved decisions from proposals and verified outcomes from unverified claims.
+
 ### Cut Point Rules
 
 Valid cut points are:
@@ -145,7 +147,7 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
-See [`prepareCompaction()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
+See [`prepareCompaction()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`. Their third argument is the summary output-token budget, not the compaction trigger reserve.
 
 ## Branch Summarization
 
@@ -268,7 +270,7 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 This prevents the model from treating it as a conversation to continue.
 
-Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
+Tool results longer than 2000 characters retain the first 1000 and last 1000 characters during serialization, with a marker identifying the omitted middle. This preserves command context and final verdicts within the same content budget. Shorter results and user messages are retained in full; facts found only in an omitted middle still require re-reading the original artifact.
 
 ## Custom Summarization via Extensions
 

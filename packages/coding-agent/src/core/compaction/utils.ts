@@ -88,14 +88,12 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 /** Maximum characters for a tool result in serialized summaries. */
 const TOOL_RESULT_MAX_CHARS = 2000;
 
-/**
- * Truncate text to a maximum character length for summarization.
- * Keeps the beginning and appends a truncation marker.
- */
 function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+	const headChars = Math.ceil(maxChars / 2);
+	const tailChars = maxChars - headChars;
+	const omittedChars = text.length - maxChars;
+	return `${text.slice(0, headChars)}\n\n[... ${omittedChars} characters omitted from middle]\n\n${text.slice(-tailChars)}`;
 }
 
 /**

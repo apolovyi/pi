@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { serializeConversation } from "../src/core/compaction/utils.ts";
 
 describe("serializeConversation", () => {
-	it("should truncate long tool results", () => {
-		const longContent = "x".repeat(5000);
+	it("preserves tool-result boundaries and final verdicts within the same content budget", () => {
+		const beginning = "command: pytest\n".padEnd(1000, "a");
+		const ending = "\nFAIL: final regression verdict".padStart(1000, "z");
+		const longContent = beginning + "x".repeat(3000) + ending;
 		const messages: Message[] = [
 			{
 				role: "toolResult",
@@ -19,14 +21,12 @@ describe("serializeConversation", () => {
 		const result = serializeConversation(messages);
 
 		expect(result).toContain("[Tool result]:");
-		expect(result).toContain("[... 3000 more characters truncated]");
-		expect(result).not.toContain("x".repeat(3000));
-		// First 2000 chars should be present
-		expect(result).toContain("x".repeat(2000));
+		expect(result).toBe(`[Tool result]: ${beginning}\n\n[... 3000 characters omitted from middle]\n\n${ending}`);
+		expect(result).not.toContain("x");
 	});
 
-	it("should not truncate short tool results", () => {
-		const shortContent = "x".repeat(1500);
+	it.each([1500, 2000])("does not truncate a %i-character tool result", (length) => {
+		const shortContent = "x".repeat(length);
 		const messages: Message[] = [
 			{
 				role: "toolResult",

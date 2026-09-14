@@ -127,12 +127,16 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	summaryMaxTokens?: number;
+	turnPrefixMaxTokens?: number;
 }
 
-export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
+export const DEFAULT_COMPACTION_SETTINGS: Required<CompactionSettings> = {
 	enabled: true,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
+	summaryMaxTokens: 13107,
+	turnPrefixMaxTokens: 8192,
 };
 
 // ============================================================================
@@ -467,6 +471,8 @@ export function findCutPoint(
 
 const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
+Preserve explicit user corrections and current constraints. Later corrections supersede earlier conflicting instructions. Distinguish user-approved decisions from assistant proposals, and verified outcomes from unverified claims.
+
 Use this EXACT format:
 
 ## Goal
@@ -499,7 +505,9 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 const UPDATE_SUMMARIZATION_INSTRUCTIONS = `Update the existing structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
+- PRESERVE existing information unless superseded by a later explicit user correction
+- PRESERVE explicit user corrections and current constraints; later corrections supersede earlier conflicting instructions
+- DISTINGUISH user-approved decisions from assistant proposals, and verified outcomes from unverified claims
 - ADD new progress, decisions, and context from the new messages
 - UPDATE the Progress section: move items from "In Progress" to "Done" when completed
 - UPDATE "Next Steps" based on what was accomplished
@@ -606,7 +614,7 @@ export async function completeSummarization(
 export async function generateSummary(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	summaryMaxTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
@@ -623,7 +631,7 @@ export async function generateSummary(
 		await generateSummaryWithUsage(
 			currentMessages,
 			model,
-			reserveTokens,
+			summaryMaxTokens,
 			apiKey,
 			headers,
 			signal,
@@ -657,7 +665,7 @@ function buildSummarizationContext(promptText: string): Context {
 export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	summaryMaxTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
@@ -670,10 +678,7 @@ export async function generateSummaryWithUsage(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = Math.min(
-		Math.floor(0.8 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
+	const maxTokens = Math.min(summaryMaxTokens, model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY);
 
 	// Use update prompt if we have a previous summary, otherwise initial prompt
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
@@ -846,7 +851,7 @@ Summarize the prefix to provide context for the retained suffix:
 ## Context for Suffix
 - [Information needed to understand the retained recent work]
 
-Be concise. Focus on what's needed to understand the kept suffix.`;
+Be concise. Focus on what's needed to understand the kept suffix. Preserve explicit user corrections and current constraints, including corrections that supersede the history summary. Distinguish user-approved decisions from assistant proposals, and verified outcomes from unverified claims.`;
 
 /**
  * Generate summaries for compaction using prepared data.
@@ -881,18 +886,19 @@ export async function compact(
 		settings,
 	} = preparation;
 
-	// Generate summaries and merge into one
+	const summaryMaxTokens = settings.summaryMaxTokens ?? DEFAULT_COMPACTION_SETTINGS.summaryMaxTokens;
+	const turnPrefixMaxTokens = settings.turnPrefixMaxTokens ?? DEFAULT_COMPACTION_SETTINGS.turnPrefixMaxTokens;
 	let summary: string;
 	let summaryUsage: Usage;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		let historyText = "No prior history.";
+		let historyText = previousSummary ?? "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
 			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
-				settings.reserveTokens,
+				summaryMaxTokens,
 				apiKey,
 				headers,
 				signal,
@@ -911,7 +917,7 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			settings.reserveTokens,
+			turnPrefixMaxTokens,
 			apiKey,
 			headers,
 			env,
@@ -926,11 +932,10 @@ export async function compact(
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`;
 		summaryUsage = historyUsage ? combineUsage(historyUsage, turnPrefixResult.usage) : turnPrefixResult.usage;
 	} else {
-		// Just generate history summary
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
-			settings.reserveTokens,
+			summaryMaxTokens,
 			apiKey,
 			headers,
 			signal,
@@ -970,7 +975,7 @@ export async function compact(
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	summaryMaxTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	env?: Record<string, string>,
@@ -981,10 +986,7 @@ async function generateTurnPrefixSummary(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = Math.min(
-		Math.floor(0.5 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	); // Smaller budget for turn prefix
+	const maxTokens = Math.min(summaryMaxTokens, model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY);
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;

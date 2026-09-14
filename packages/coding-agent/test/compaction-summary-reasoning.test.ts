@@ -7,7 +7,9 @@ import {
 	completeSummarization,
 	generateSummary,
 	generateSummaryWithUsage,
+	shouldCompact,
 } from "../src/core/compaction/index.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -147,6 +149,70 @@ describe("generateSummary reasoning options", () => {
 		expect(prompt).toContain("<conversation>");
 	});
 
+	it("preserves the previous summary when only a split-turn prefix needs summarizing", async () => {
+		const previousSummary = "User correction: keep the operating window at 240000 tokens.";
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [],
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 201000,
+			previousSummary,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 40000, keepRecentTokens: 50000 },
+		};
+
+		const result = await compact(preparation, createModel(false), "test-key");
+
+		expect(result.summary).toContain(previousSummary);
+		expect(result.summary).toContain("Test summary");
+		expect(result.summary).not.toContain("No prior history.");
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(result.usage).toEqual(mockSummaryResponse.usage);
+	});
+
+	it.each([1000, 40000])("keeps summary budgets independent of a %i-token trigger reserve", async (reserveTokens) => {
+		const manager = SettingsManager.inMemory({
+			compaction: { reserveTokens, summaryMaxTokens: 32000, turnPrefixMaxTokens: 20000 },
+		});
+		const settings = manager.getCompactionSettings();
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: messages,
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 201000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings,
+		};
+
+		await compact(preparation, createModel(false, 128000), "test-key");
+
+		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([32000, 20000]);
+		expect(shouldCompact(240000 - reserveTokens, 240000, settings)).toBe(false);
+		expect(shouldCompact(240001 - reserveTokens, 240000, settings)).toBe(true);
+	});
+
+	it("uses independent default summary budgets", async () => {
+		const manager = SettingsManager.inMemory({ compaction: { reserveTokens: 90000 } });
+		expect(manager.getCompactionSettings()).toMatchObject({ summaryMaxTokens: 13107, turnPrefixMaxTokens: 8192 });
+	});
+
+	it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects an invalid summary budget of %s",
+		(value) => {
+			for (const name of ["summaryMaxTokens", "turnPrefixMaxTokens"] as const) {
+				const manager = SettingsManager.inMemory({ compaction: { [name]: value } });
+				expect(() => manager.getCompactionSettings()).toThrow(`Invalid compaction.${name}`);
+			}
+		},
+	);
+
+	it("treats the standalone summary budget as an output cap, not a trigger reserve", async () => {
+		await generateSummaryWithUsage(messages, createModel(false), 2000, "test-key");
+		expect(completeSimpleMock.mock.calls[0][2]?.maxTokens).toBe(2000);
+	});
+
 	it("rejects tool calls from conversation summaries", async () => {
 		completeSimpleMock.mockResolvedValueOnce(mockToolCallResponse);
 
@@ -280,7 +346,13 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
+			settings: {
+				enabled: true,
+				reserveTokens: 40000,
+				keepRecentTokens: 20000,
+				summaryMaxTokens: 500000,
+				turnPrefixMaxTokens: 500000,
+			},
 		};
 
 		const result = await compact(preparation, createModel(false, 128000), "test-key");
