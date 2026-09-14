@@ -110,7 +110,7 @@ For split turns, Pi generates two summaries and merges them:
 1. **History summary**: Previous context (if any)
 2. **Turn prefix summary**: The early part of the split turn
 
-If no complete history messages need summarizing, the previous summary is retained verbatim rather than discarded. Summary prompts preserve explicit user corrections and distinguish approved decisions from proposals and verified outcomes from unverified claims.
+If no complete history messages need summarizing, the previous summary is retained verbatim rather than discarded. Summary prompts preserve explicit user corrections and distinguish approved decisions from proposals and verified outcomes from unverified claims. They also preserve explicit negative facts: "not run" must not be weakened into "no result observed" unless later evidence or user corrections supersede it.
 
 ### Cut Point Rules
 

@@ -21,6 +21,7 @@
 
 - Fixed repeated split-turn compaction discarding the previous summary and automatic compaction bypassing cooldown between responses.
 - Fixed expired compaction cooldowns renewing indefinitely after repeated failures, and successful manual recovery failing to clear automatic-compaction failure state.
+- Strengthened summary instructions to preserve explicit negative facts instead of weakening them into unknown status.
 - Fixed shell tools overriding inherited executable precedence when adding Pi's fallback tools to `PATH`.
 - Fixed extension boolean CLI flags consuming positional prompts or treating `=false` as true. Flags are parsed against loaded extension definitions, and invalid values fail before prompting.
 - Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).

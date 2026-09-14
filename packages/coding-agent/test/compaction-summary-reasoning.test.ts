@@ -98,6 +98,13 @@ describe("generateSummary reasoning options", () => {
 		});
 	});
 
+	it("instructs the summarizer to preserve explicit negatives rather than turn them into unknowns", async () => {
+		await generateSummaryWithUsage(messages, createModel(false), 2000, "test-key");
+		const context = completeSimpleMock.mock.calls[0][1] as Context;
+		expect(context.systemPrompt).toContain("Preserve explicit negative facts");
+		expect(context.systemPrompt).toContain('Do not weaken "not run" into "no result observed"');
+	});
+
 	it("preserves the string result from generateSummary", async () => {
 		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).resolves.toBe(
 			"## Goal\nTest summary",

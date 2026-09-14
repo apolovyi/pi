@@ -163,4 +163,6 @@ export function serializeConversation(messages: Message[]): string {
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
+Preserve explicit negative facts unless later evidence or explicit user corrections supersede them. Distinguish known negatives (not run, not approved, not implemented) from unknown status. Do not weaken "not run" into "no result observed".
+
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;

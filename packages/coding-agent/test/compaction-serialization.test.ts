@@ -56,7 +56,7 @@ describe("serializeConversation", () => {
 				toolCallId: "tc2",
 				isError: true,
 				timestamp: 1,
-				content: [{ type: "text", text: "a".repeat(1500) + "\n" + evidence + "\n" + "z".repeat(1500) }],
+				content: [{ type: "text", text: `${"a".repeat(1500)}\n${evidence}\n${"z".repeat(1500)}` }],
 			},
 		]);
 		expect(result).toContain('[Tool result name="bash" call="tc2" isError=true]:');
@@ -76,15 +76,7 @@ describe("serializeConversation", () => {
 				content: [
 					{
 						type: "text",
-						text:
-							"a".repeat(1500) +
-							"\nERROR: " +
-							"x".repeat(600) +
-							"\n" +
-							evidence +
-							"\n" +
-							Array.from({ length: 100 }, (_, index) => `FAILED test_${index}\n`).join("") +
-							"z".repeat(1500),
+						text: `${"a".repeat(1500)}\nERROR: ${"x".repeat(600)}\n${evidence}\n${Array.from({ length: 100 }, (_, index) => `FAILED test_${index}\n`).join("")}${"z".repeat(1500)}`,
 					},
 				],
 			},
