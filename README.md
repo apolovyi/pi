@@ -12,6 +12,16 @@
 
 # Pi Agent Harness
 
+## My contributions
+
+My work in this fork of [Pi](https://github.com/earendil-works/pi) focuses on long-running agent reliability:
+
+- **Compaction recovery:** restore automatic retries after failed summarization and clear cooldown state after successful manual recovery. [Code and tests](https://github.com/apolovyi/pi/commit/750ba73b799f7d31063aa06a8758038155e9b2da).
+- **Lifecycle observability:** expose compaction start/end events to extensions, including outcomes, retry state and failures. [Code and tests](https://github.com/apolovyi/pi/commit/390d1d8a17822b26f06e66d21372db7c77af4639).
+- **Codex integration:** make client identity configurable and record transport selection, fallback, timing and response diagnostics. [Code and tests](https://github.com/apolovyi/pi/commit/66a1a06e658a630fee9b5e19378d6f220479bf27).
+
+## Upstream project
+
 This is the home of the Pi agent harness project including our self extensible coding agent.
 
 * **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
