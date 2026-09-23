@@ -2726,7 +2726,7 @@ export class AgentSession {
 			}
 			contextTokens = estimate.tokens;
 		} else {
-			contextTokens = directContextTokens;
+			contextTokens = directContextTokens + estimateTokens(assistantMessage);
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			return await this._runAutoCompaction("threshold", false);

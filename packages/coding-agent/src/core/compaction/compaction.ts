@@ -157,10 +157,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /**
  * Calculate total context tokens from usage.
- * Uses the native totalTokens field when available, falls back to computing from components.
  */
 export function calculateContextTokens(usage: Usage): number {
-	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	return usage.input + usage.cacheRead + usage.cacheWrite;
 }
 
 /**
@@ -232,7 +231,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	}
 
 	const usageTokens = calculateContextTokens(usageInfo.usage);
-	let trailingTokens = 0;
+	let trailingTokens = estimateTokens(messages[usageInfo.index]);
 	for (let i = usageInfo.index + 1; i < messages.length; i++) {
 		trailingTokens += estimateTokens(messages[i]);
 	}

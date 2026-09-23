@@ -222,9 +222,9 @@ describe("session context edits", () => {
 		session.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
 
 		const estimate = estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch());
-		expect(estimate.usageTokens).toBe(4_100);
-		expect(estimate.trailingTokens).toBe(1);
-		expect(estimate.tokens).toBe(4_101);
+		expect(estimate.usageTokens).toBe(4_000);
+		expect(estimate.trailingTokens).toBe(3);
+		expect(estimate.tokens).toBe(4_003);
 	});
 
 	it("does not reuse post-edit assistant usage after a later compaction", () => {

@@ -1003,9 +1003,11 @@ describe("AgentSession compaction characterization", () => {
 		const belowThresholdSpy = vi.spyOn(belowThresholdInternals, "_runAutoCompaction").mockResolvedValue(false);
 		const disabledSpy = vi.spyOn(disabledInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await belowThresholdInternals._checkCompaction(
-			createAssistant(belowThresholdHarness, { stopReason: "stop", totalTokens: 1_000, timestamp: Date.now() }),
-		);
+		const assistant = createAssistant(belowThresholdHarness, { stopReason: "stop", totalTokens: 199_500 });
+		assistant.usage.input = 1_000;
+		assistant.usage.output = 198_500;
+		belowThresholdHarness.session.agent.state.messages = [assistant];
+		await belowThresholdInternals._checkCompaction(assistant);
 		await disabledInternals._checkCompaction(
 			createAssistant(disabledHarness, { stopReason: "stop", totalTokens: 1_000_000, timestamp: Date.now() }),
 		);
