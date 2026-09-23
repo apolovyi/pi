@@ -829,6 +829,9 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	private _emit(event: AgentSessionEvent): void {
+		if (event.type === "compaction_start" || event.type === "compaction_end") {
+			void this._extensionRunner.emit(event);
+		}
 		for (const l of this._eventListeners) {
 			l(event);
 		}

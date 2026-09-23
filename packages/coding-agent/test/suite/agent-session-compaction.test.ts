@@ -827,11 +827,18 @@ describe("AgentSession compaction characterization", () => {
 	});
 
 	it("compacts successful overflow responses without retrying", async () => {
+		const extensionEvents: Array<{ type: string }> = [];
 		const harness = await createHarness({
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
+					pi.on("compaction_start", (event) => {
+						extensionEvents.push(event);
+					});
+					pi.on("compaction_end", (event) => {
+						extensionEvents.push(event);
+					});
 					pi.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "successful overflow compacted",
@@ -855,6 +862,10 @@ describe("AgentSession compaction characterization", () => {
 			willRetry: false,
 		});
 		expect(harness.faux.state.callCount).toBe(1);
+		expect(extensionEvents).toEqual([
+			...harness.eventsOfType("compaction_start"),
+			...harness.eventsOfType("compaction_end"),
+		]);
 	});
 
 	it("ignores stale pre-compaction assistant usage on pre-prompt checks", async () => {

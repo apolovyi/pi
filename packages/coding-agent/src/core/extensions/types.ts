@@ -633,6 +633,24 @@ export interface SessionCompactFailedEvent {
 	fromExtension: boolean;
 }
 
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
+/** Fired when manual or automatic compaction starts. */
+export interface CompactionStartEvent {
+	type: "compaction_start";
+	reason: CompactionReason;
+}
+
+/** Fired when manual or automatic compaction succeeds, fails, aborts, or is skipped. */
+export interface CompactionEndEvent {
+	type: "compaction_end";
+	reason: CompactionReason;
+	result: CompactionResult | undefined;
+	aborted: boolean;
+	willRetry: boolean;
+	errorMessage?: string;
+}
+
 /** Fired before an extension runtime is torn down due to quit, reload, or session replacement. */
 export interface SessionShutdownEvent {
 	type: "session_shutdown";
@@ -680,6 +698,8 @@ export type SessionEvent =
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
 	| SessionCompactFailedEvent
+	| CompactionStartEvent
+	| CompactionEndEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent;
@@ -1372,6 +1392,8 @@ export interface ExtensionAPI {
 	): () => void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): () => void;
 	on(event: "session_compact_failed", handler: ExtensionHandler<SessionCompactFailedEvent>): () => void;
+	on(event: "compaction_start", handler: ExtensionHandler<CompactionStartEvent>): () => void;
+	on(event: "compaction_end", handler: ExtensionHandler<CompactionEndEvent>): () => void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): () => void;
 	on(
 		event: "session_before_tree",
