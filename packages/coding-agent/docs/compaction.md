@@ -287,7 +287,7 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 This prevents the model from treating it as a conversation to continue.
 
-Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
+Tool-result excerpts retain at most 2000 UTF-16 code units, split between the beginning and end without splitting surrogate pairs. Each omission is marked in the summarizer input with an audit-file path. The JSON audit under the agent directory's `logs/summary-truncation/` contains the exact original serialized text, tool-call identity, original/retained sizes, and omitted half-open range for later analysis. Successful audit writes emit nothing to stdout or stderr in any mode; a failed audit write aborts summarization. This bounds individual tool-result content, not the complete request or the generated summary.
 
 ## Custom Summarization via Extensions
 
