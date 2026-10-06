@@ -128,7 +128,7 @@ describe("AgentSession compaction model overrides", () => {
 		expect(budgets).toEqual([1600]);
 		expect(harness.sessionManager.getEntries().find((entry) => entry.type === "compaction")).toMatchObject({
 			firstKeptEntryId: recentUserId,
-			summary: "built-in summary",
+			summary: expect.stringContaining("built-in summary"),
 		});
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});

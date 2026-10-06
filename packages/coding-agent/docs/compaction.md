@@ -287,7 +287,9 @@ Before summarization, messages are serialized to text via [`serializeConversatio
 
 This prevents the model from treating it as a conversation to continue.
 
-Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
+Tool-result excerpts retain at most 2000 UTF-16 code units, split between the beginning and end without splitting surrogate pairs. Tool names, call IDs, error status, and omitted sizes remain in the summarizer input. This bounds individual tool-result content, not the complete request or the generated summary.
+
+Built-in session compaction and branch summaries append a `session-recovery` reference after generation, containing the session JSONL path and pre-summary leaf ID. To recover omitted evidence, follow `parentId` ancestry from that leaf, match `toolCallId`, and apply `context_edit` entries when reconstructing edited context. Raw history remains in the session file; no separate truncation audits are written. Nonpersistent sessions explicitly report that omitted output has no durable recovery source. Standalone serialization/generation helpers and extension-provided summaries do not add session references; their callers own persistence.
 
 ## Custom Summarization via Extensions
 

@@ -2710,8 +2710,9 @@ export class AgentSession {
 		reason: "manual" | "threshold" | "overflow",
 	): Promise<CompactionResult> {
 		// Resolve the request only when Pi summarizes itself: routing may call models or fail.
+		const recoveryReference = this._summaryRecoveryReference();
 		const request = await this._getSummarizationRequestAuth(model, signal);
-		return compact(
+		const result = await compact(
 			preparation,
 			request.model,
 			request.apiKey,
@@ -2725,6 +2726,17 @@ export class AgentSession {
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
 			undefined, // sessionId
 		);
+		result.summary += recoveryReference;
+		return result;
+	}
+
+	private _summaryRecoveryReference(): string {
+		const sessionFile = this.sessionFile;
+		if (!sessionFile) {
+			return "\n\n<session-recovery>\nNonpersistent session: omitted tool output has no durable recovery source.\n</session-recovery>";
+		}
+		const reference = JSON.stringify({ sessionFile, leafId: this.sessionManager.getLeafId() });
+		return `\n\n<session-recovery>\n${reference}\nFull history remains in this session JSONL. Follow parentId ancestry from leafId; match toolCallId for omitted tool output and apply context_edit entries when reconstructing edited context.\n</session-recovery>`;
 	}
 
 	private _clearManualCompactionState(): void {
@@ -4042,6 +4054,7 @@ export class AgentSession {
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const signal = this._branchSummaryAbortController.signal;
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
+				const recoveryReference = this._summaryRecoveryReference();
 				const result = await generateBranchSummary(entriesToSummarize, {
 					...(await this._getSummarizationRequestAuth(this.model!, signal)),
 					signal,
@@ -4058,7 +4071,7 @@ export class AgentSession {
 				if (result.error) {
 					throw new Error(result.error);
 				}
-				summaryText = result.summary;
+				summaryText = result.summary ? result.summary + recoveryReference : result.summary;
 				summaryUsage = result.usage;
 				summaryDetails = {
 					readFiles: result.readFiles || [],

@@ -90,19 +90,6 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 // Message Serialization
 // ============================================================================
 
-/** Maximum characters for a tool result in serialized summaries. */
-const TOOL_RESULT_MAX_CHARS = 2000;
-
-/**
- * Truncate text to a maximum character length for summarization.
- * Keeps the beginning and appends a truncation marker.
- */
-function truncateForSummary(text: string, maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
-}
-
 /**
  * Serialize LLM messages to text for summarization.
  * This prevents the model from treating it as a conversation to continue.
@@ -130,7 +117,7 @@ export function serializeConversation(messages: Message[]): string {
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
 						.join(", ");
-					toolCalls.push(`${block.name}(${argsStr})`);
+					toolCalls.push(`call=${JSON.stringify(block.id)} ${block.name}(${argsStr})`);
 				}
 			}
 
@@ -144,10 +131,15 @@ export function serializeConversation(messages: Message[]): string {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
-			const content = contentText(msg.content, "");
-			if (content) {
-				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
+			let content = contentText(msg.content, "");
+			if (content.length > 2000) {
+				const head = content.slice(0, 1000).replace(/[\uD800-\uDBFF]$/, "");
+				const tail = content.slice(-1000).replace(/^[\uDC00-\uDFFF]/, "");
+				content = `${head}\n\n[... ${content.length - head.length - tail.length} characters omitted]\n\n${tail}`;
 			}
+			parts.push(
+				`[Tool result name=${JSON.stringify(msg.toolName)} call=${JSON.stringify(msg.toolCallId)} isError=${msg.isError}]: ${content}`,
+			);
 		}
 	}
 
@@ -159,5 +151,7 @@ export function serializeConversation(messages: Message[]): string {
 // ============================================================================
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+
+Preserve explicit user corrections and current constraints; later corrections supersede earlier conflicting instructions. Distinguish approved decisions from proposals, verified outcomes from unverified claims, and known negatives (not run, not approved, not implemented) from unknown status.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
