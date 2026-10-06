@@ -617,7 +617,7 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	const parsed = parseArgs(args);
+	let parsed = parseArgs(args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -751,7 +751,6 @@ export async function main(args: string[], options?: MainOptions) {
 			agentDir,
 			settingsManager: runtimeSettingsManager,
 			modelRuntimeSignal: AbortSignal.timeout(15_000),
-			extensionFlagValues: parsed.unknownFlags,
 			resourceLoaderReloadOptions: shouldResolveProjectTrust
 				? {
 						resolveProjectTrust: async ({ extensionsResult }) => {
@@ -793,7 +792,13 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		const extensionsResult = resourceLoader.getExtensions();
+		parsed = parseArgs(args, new Map(extensionsResult.extensions.flatMap((extension) => [...extension.flags])));
+		for (const [name, value] of parsed.unknownFlags) {
+			extensionsResult.runtime.flagValues.set(name, value);
+		}
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
+			...parsed.diagnostics,
 			...projectTrustDiagnostics,
 			...services.diagnostics,
 			...collectSettingsDiagnostics(settingsManager),
