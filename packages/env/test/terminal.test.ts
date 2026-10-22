@@ -48,9 +48,15 @@ function collector(): {
 }
 
 describe.skipIf(process.platform === "win32")("openTerminal", () => {
-	it("runs a program in a terminal with input, resizing and its exit code", async () => {
+	it("runs a program in a terminal with input, resizing and its exit code", async ({ onTestFailed }) => {
 		const { connection, cwd } = connect();
 		const output = collector();
+		let phase = "open terminal";
+		onTestFailed(() => {
+			console.error(
+				`[pi-env-terminal-test] ${JSON.stringify({ phase, daemon, output: output.bytes().toString("latin1") })}`,
+			);
+		});
 		const terminal = await openTerminal(connection, {
 			cwd,
 			argv: ["/bin/sh"],
@@ -61,13 +67,18 @@ describe.skipIf(process.platform === "win32")("openTerminal", () => {
 		});
 		expect(terminal.pid).toBeGreaterThan(0);
 		terminal.write("test -t 0 && echo IS-A-TTY; stty size; echo $TERM\n");
+		phase = "initial TTY marker";
 		await output.waitFor("IS-A-TTY");
+		phase = "initial size (24 80)";
 		await output.waitFor("24 80");
+		phase = "TERM value (xterm-256color)";
 		await output.waitFor("xterm-256color");
 		terminal.resize(100, 30);
 		terminal.write("stty size\n");
+		phase = "resized size (30 100)";
 		await output.waitFor("30 100");
 		terminal.write("exit 3\n");
+		phase = "exit code";
 		expect(await terminal.exited).toBe(3);
 	}, 20_000);
 
