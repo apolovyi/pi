@@ -11,7 +11,7 @@ import {
 	stream as streamOpenAICodexResponses,
 	streamSimple as streamSimpleOpenAICodexResponses,
 } from "../src/api/openai-codex-responses.ts";
-import type { Api, Context, Model } from "../src/types.ts";
+import type { Api, AssistantMessage, Context, Model } from "../src/types.ts";
 import { formatUserAgent } from "../src/utils/identity.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
@@ -161,8 +161,12 @@ describe("openai-codex streaming", () => {
 				expect(headers?.get("Authorization")).toBe(`Bearer ${token}`);
 				expect(headers?.get("chatgpt-account-id")).toBe("acc_test");
 				expect(headers?.get("OpenAI-Beta")).toBe("responses=experimental");
-				expect(headers?.get("originator")).toBe("pi");
-				expect(headers?.get("User-Agent")).toBe(formatUserAgent());
+				expect(headers?.get("originator")).toBe("codex_cli");
+				expect(headers?.get("version")).toBe("0.160.0");
+				expect(headers?.get("User-Agent")).toBe(
+					formatUserAgent({ version: "0.160.0" }).replace(/^pi\//, "codex_cli/"),
+				);
+				expect(headers?.has("x-codex-client-version-override")).toBe(false);
 				expect(headers?.get("accept")).toBe("text/event-stream");
 				expect(headers?.has("x-api-key")).toBe(false);
 				return new Response(stream, {
@@ -203,6 +207,7 @@ describe("openai-codex streaming", () => {
 				providerEventModels.push(eventModel);
 			},
 		});
+		let completedMessage: AssistantMessage | undefined;
 		let sawTextDelta = false;
 		let sawDone = false;
 
@@ -212,6 +217,7 @@ describe("openai-codex streaming", () => {
 			}
 			if (event.type === "done") {
 				sawDone = true;
+				completedMessage = event.message;
 				expect(event.message.content.find((c) => c.type === "text")?.text).toBe("Hello");
 			}
 		}
@@ -226,6 +232,108 @@ describe("openai-codex streaming", () => {
 			"response.completed",
 		]);
 		expect(providerEventModels).toEqual([model, model, model, model, model]);
+		expect(completedMessage?.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				clientOriginator: "codex_cli",
+				clientVersion: "0.160.0",
+				clientVersionSource: "default",
+				configuredTransport: "sse",
+				actualTransport: "sse",
+				fallbackToSse: false,
+				websocketAttempts: 0,
+				sseAttempts: 1,
+				responseStatus: 200,
+				requestBytes: expect.any(Number),
+				durationMs: expect.any(Number),
+			}),
+		});
+	});
+
+	it.each([
+		[undefined, formatUserAgent({ version: "0.154.0" }).replace(/^pi\//, "codex_cli/")],
+		[
+			{ userAgent: "detailed", version: "1.4.0" },
+			formatUserAgent({ version: "0.154.0" }).replace(/^pi\//, "codex_cli/"),
+		],
+		[{ userAgent: "short" }, "pi"],
+		[{ userAgent: { custom: "synthetic-client/1" } }, "synthetic-client/1"],
+	] as const)("validates the configured Codex version while preserving identity %j", async (identity, userAgent) => {
+		const token = mockToken();
+		const sse = buildSSEPayload({ status: "completed" });
+		let requestHeaders: Headers | undefined;
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			requestHeaders = init?.headers instanceof Headers ? init.headers : undefined;
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		});
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 240000,
+			maxTokens: 128000,
+			headers: { "x-codex-client-version-override": "0.154.0" },
+		};
+		const context = normalizeContext({
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		});
+
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			fetch: fetchMock,
+			identity,
+		}).result();
+
+		expect(requestHeaders?.get("version")).toBe("0.154.0");
+		expect(requestHeaders?.get("User-Agent")).toBe(userAgent);
+		expect(requestHeaders?.has("x-codex-client-version-override")).toBe(false);
+		expect(result.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				clientVersion: "0.154.0",
+				clientVersionSource: "configured",
+			}),
+		});
+	});
+
+	it("rejects an invalid configured Codex client version before transport", async () => {
+		const fetchMock = vi.fn();
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 240000,
+			maxTokens: 128000,
+			headers: { "x-codex-client-version-override": "latest" },
+		};
+		const context = normalizeContext({
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		});
+
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: mockToken(),
+			transport: "sse",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Invalid OpenAI Codex client version: latest");
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	// Regression test for https://github.com/earendil-works/pi/issues/9047
@@ -434,6 +542,16 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Codex SSE response headers timed out after 10ms");
+		expect(result.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				clientOriginator: "codex_cli",
+				clientVersion: "0.160.0",
+				actualTransport: "sse",
+				sseAttempts: 1,
+			}),
+		});
 	});
 
 	it("aborts SSE body reads after response headers arrive", async () => {
@@ -829,14 +947,14 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-			headers: { originator: "my-app" },
+			headers: { originator: "my-app", "x-codex-client-version-override": "0.154.0" },
 		};
 		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		});
 
-		await streamOpenAICodexResponses(model, context, {
+		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
 			transport: "sse",
 			headers: { "user-agent": "my-app/1.0", Authorization: "Bearer ignored" },
@@ -845,6 +963,17 @@ describe("openai-codex streaming", () => {
 		expect(capturedHeaders?.get("originator")).toBe("my-app");
 		expect(capturedHeaders?.get("User-Agent")).toBe("my-app/1.0");
 		expect(capturedHeaders?.get("Authorization")).toBe(`Bearer ${token}`);
+		expect(capturedHeaders?.get("version")).toBe("0.154.0");
+		expect(capturedHeaders?.has("x-codex-client-version-override")).toBe(false);
+		expect(result.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				clientOriginator: "my-app",
+				clientVersion: "0.154.0",
+				clientVersionSource: "configured",
+			}),
+		});
 	});
 
 	it("preserves gpt-5.5 xhigh reasoning effort from simple options", async () => {
@@ -1425,6 +1554,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
+			headers: { "x-codex-client-version-override": "0.154.0" },
 		};
 		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
@@ -1454,11 +1584,88 @@ describe("openai-codex streaming", () => {
 		expect(capturedWebSocketHeaders?.["session-id"]).toBe("session-auto");
 		expect(capturedWebSocketHeaders?.session_id).toBeUndefined();
 		expect(capturedWebSocketHeaders?.["x-client-request-id"]).toBe("session-auto");
+		expect(capturedWebSocketHeaders?.originator).toBe("codex_cli");
+		expect(capturedWebSocketHeaders?.version).toBe("0.154.0");
+		expect(capturedWebSocketHeaders?.["user-agent"]).toBe(
+			formatUserAgent({ version: "0.154.0" }).replace(/^pi\//, "codex_cli/"),
+		);
+		expect(capturedWebSocketHeaders?.["x-codex-client-version-override"]).toBeUndefined();
+		expect(result.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				clientOriginator: "codex_cli",
+				clientVersion: "0.154.0",
+				clientVersionSource: "configured",
+				configuredTransport: "auto",
+				actualTransport: "websocket",
+				fallbackToSse: false,
+				websocketAttempts: 1,
+				sseAttempts: 0,
+			}),
+		});
 		expect(global.fetch).not.toHaveBeenCalled();
 		expect(getOpenAICodexWebSocketDebugStats("session-auto")).toMatchObject({
 			cachedContextRequests: 1,
 			fullContextRequests: 1,
 		});
+	});
+
+	it("reports initial and cached WebSocket fallbacks without flagging explicit SSE", async () => {
+		let websocketAttempts = 0;
+		class UnavailableWebSocket {
+			constructor() {
+				websocketAttempts++;
+				throw new Error("Synthetic WebSocket connection failure");
+			}
+		}
+		vi.stubGlobal("WebSocket", UnavailableWebSocket);
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(buildSSEPayload({ status: "completed" }), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				}),
+		);
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context = normalizeContext({ messages: [] });
+		for (const [transport, attempts, fallback] of [
+			["auto", 1, true],
+			["auto", 0, true],
+			["sse", 0, false],
+		] as const) {
+			const result = await streamOpenAICodexResponses(model, context, {
+				apiKey: mockToken(),
+				sessionId: "synthetic-fallback-session",
+				transport,
+				fetch: fetchMock,
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(result.diagnostics).toContainEqual({
+				type: "openai_codex_request",
+				timestamp: expect.any(Number),
+				details: expect.objectContaining({
+					configuredTransport: transport,
+					actualTransport: "sse",
+					fallbackToSse: fallback,
+					websocketAttempts: attempts,
+					sseAttempts: 1,
+				}),
+			});
+		}
+		expect(websocketAttempts).toBe(1);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
 	it("scopes cached websockets to the authenticated account", async () => {
@@ -2591,6 +2798,15 @@ describe("openai-codex streaming", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Server requested 2s retry delay (max: 1s)");
+		expect(result.diagnostics).toContainEqual({
+			type: "openai_codex_request",
+			timestamp: expect.any(Number),
+			details: expect.objectContaining({
+				actualTransport: "sse",
+				sseAttempts: 1,
+				responseStatus: status,
+			}),
+		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
