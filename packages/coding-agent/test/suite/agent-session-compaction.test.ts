@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
@@ -12,7 +14,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getPackageDir } from "../../src/config.ts";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { createHarness, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
@@ -298,6 +302,70 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(result.summary).toContain("summary from custom stream");
 		expect(getStreamCallCount()).toBe(1);
+	});
+
+	it.each(["manual", "threshold", "overflow", "branch"] as const)(
+		"retains a recoverable persisted transcript after %s summarization",
+		async (mode) => {
+			const scratchRoot = join(getPackageDir(), ".tmp");
+			mkdirSync(scratchRoot, { recursive: true });
+			const scratch = mkdtempSync(join(scratchRoot, "summary-recovery-"));
+			const manager = SessionManager.create(scratch, scratch);
+			const harness = await createHarness({ sessionManager: manager });
+			harnesses.push(harness);
+			try {
+				const target = manager.appendMessage({ role: "user", content: "Synthetic history", timestamp: 1 });
+				const toolCall = fauxToolCall("read", { path: "synthetic.txt" });
+				manager.appendMessage(fauxAssistantMessage(toolCall, { stopReason: "toolUse" }));
+				const original = `HEAD${"x".repeat(2000)}SYNTHETIC_OMITTED_EVIDENCE${"y".repeat(2000)}TAIL`;
+				manager.appendMessage({
+					role: "toolResult",
+					toolName: "read",
+					toolCallId: toolCall.id,
+					content: [{ type: "text", text: original }],
+					isError: false,
+					timestamp: 2,
+				});
+				seedCompactableSession(harness);
+				const leafId = manager.getLeafId();
+				useSummaryStreamFn(harness, "Synthetic summary without copied evidence");
+				let summary: string | undefined;
+				if (mode === "branch") {
+					summary = (await harness.session.navigateTree(target, { summarize: true })).summaryEntry?.summary;
+				} else if (mode === "manual") {
+					summary = (await harness.session.compact()).summary;
+				} else {
+					await (harness.session as unknown as SessionWithCompactionInternals)._runAutoCompaction(mode, false);
+					summary = harness.eventsOfType("compaction_end").at(-1)?.result?.summary;
+				}
+				expect(summary).toContain("Synthetic summary without copied evidence");
+				const reference = JSON.parse(summary!.match(/<session-recovery>\n([^\n]+)/)![1]);
+				expect(reference).toEqual({ sessionFile: manager.getSessionFile(), leafId });
+				const reopened = SessionManager.open(reference.sessionFile, scratch);
+				const toolResult = reopened
+					.getBranch(reference.leafId)
+					.find(
+						(entry) =>
+							entry.type === "message" &&
+							entry.message.role === "toolResult" &&
+							entry.message.toolCallId === toolCall.id,
+					);
+				expect(toolResult).toMatchObject({ message: { content: [{ type: "text", text: original }] } });
+				expect(reopened.getEntries()).toEqual(expect.arrayContaining([expect.objectContaining({ summary })]));
+			} finally {
+				rmSync(scratch, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("identifies the recovery limit for nonpersistent built-in summaries", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		useSummaryStreamFn(harness, "Synthetic nonpersistent summary");
+		const result = await harness.session.compact();
+		expect(result.summary).toContain("Nonpersistent session: omitted tool output has no durable recovery source.");
+		expect(result.summary).not.toContain('"sessionFile"');
 	});
 
 	it("manually compacts with provider-resolved bearer auth", async () => {
