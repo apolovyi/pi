@@ -836,6 +836,39 @@ describe("ExtensionRunner", () => {
 			expect(result.runtime.flagValues.get("shared-flag")).toBe(true);
 		});
 
+		it("preserves string choices and their default through extension registration", async () => {
+			const runtime = createExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				(pi) =>
+					pi.registerFlag("service-tier", {
+						type: "string",
+						choices: ["default", "priority", "ultrafast"],
+						default: "ultrafast",
+					}),
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			expect(extension.flags.get("service-tier")?.choices).toEqual(["default", "priority", "ultrafast"]);
+			expect(runtime.flagValues.get("service-tier")).toBe("ultrafast");
+		});
+
+		it.each([{ choices: [] }, { choices: [""] }, { choices: ["priority"] }])(
+			"rejects incompatible flag choices $choices",
+			async ({ choices }) => {
+				const runtime = createExtensionRuntime();
+				await expect(
+					loadExtensionFromFactory(
+						(pi) => pi.registerFlag("service-tier", { type: "string", choices, default: "ultrafast" }),
+						tempDir,
+						createEventBus(),
+						runtime,
+					),
+				).rejects.toThrow('Invalid choices for flag "service-tier"');
+				expect(runtime.flagValues.has("service-tier")).toBe(false);
+			},
+		);
+
 		it("rejects default values that do not match the flag type", async () => {
 			const extCode = `
 				export default function(pi) {

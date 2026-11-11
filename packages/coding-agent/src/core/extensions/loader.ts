@@ -339,12 +339,28 @@ function createExtensionAPI(
 
 		registerFlag(
 			name: string,
-			options: { description?: string; type: "boolean" | "string"; default?: boolean | string },
+			options: {
+				description?: string;
+				type: "boolean" | "string";
+				default?: boolean | string;
+				choices?: readonly string[];
+			},
 		): void {
 			assertActive();
 			if (options.default !== undefined && typeof options.default !== options.type) {
 				throw new Error(
 					`Invalid default for flag "${name}": expected ${options.type}, got ${typeof options.default}`,
+				);
+			}
+			if (
+				options.choices &&
+				(options.type !== "string" ||
+					options.choices.length === 0 ||
+					options.choices.some((choice) => typeof choice !== "string" || choice.length === 0) ||
+					(options.default !== undefined && !options.choices.includes(String(options.default))))
+			) {
+				throw new Error(
+					`Invalid choices for flag "${name}": choices must be nonempty strings and include its default`,
 				);
 			}
 			extension.flags.set(name, { name, extensionPath: extension.path, ...options });

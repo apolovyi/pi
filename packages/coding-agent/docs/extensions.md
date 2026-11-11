@@ -1877,7 +1877,15 @@ pi.registerShortcut("ctrl+shift+p", {
 
 ### pi.registerFlag(name, options)
 
-Register a CLI flag.
+Register a CLI flag. String flags can declare a nonempty `choices` list; their default must belong to that list. The CLI rejects values outside it before inference, for either `--name=value` or `--name value` syntax.
+
+```typescript
+pi.registerFlag("service-tier", {
+  type: "string",
+  choices: ["default", "priority", "ultrafast"],
+  default: "ultrafast",
+});
+```
 
 ```typescript
 pi.registerFlag("plan", {

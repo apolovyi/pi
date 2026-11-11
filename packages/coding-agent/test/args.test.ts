@@ -513,6 +513,36 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("string extension flag choices", () => {
+		const flags = new Map([
+			["service-tier", { type: "string" as const, choices: ["default", "priority", "ultrafast"] }],
+		]);
+
+		test.each(["default", "priority", "ultrafast"])("accepts %s without consuming the prompt", (tier) => {
+			for (const args of [
+				[`--service-tier=${tier}`, "prompt"],
+				["--service-tier", tier, "prompt"],
+			]) {
+				const result = parseArgs(args, flags);
+				expect(result.unknownFlags.get("service-tier")).toBe(tier);
+				expect(result.messages).toEqual(["prompt"]);
+				expect(result.diagnostics).toEqual([]);
+			}
+		});
+
+		test.each(["", "fast", "true", "unknown"])("rejects invalid tier %j", (tier) => {
+			const result = parseArgs([`--service-tier=${tier}`, "prompt"], flags);
+			expect(result.diagnostics).toEqual([
+				{
+					type: "error",
+					message: `Invalid value for --service-tier: ${JSON.stringify(tier)}. Valid values: default, priority, ultrafast.`,
+				},
+			]);
+			expect(result.unknownFlags.has("service-tier")).toBe(false);
+			expect(result.messages).toEqual(["prompt"]);
+		});
+	});
+
 	describe("messages and file args", () => {
 		test("parses plain text messages", () => {
 			const result = parseArgs(["hello", "world"]);

@@ -1747,6 +1747,7 @@ export interface ExtensionAPI {
 					description?: string;
 					type: "string";
 					default?: string;
+					choices?: readonly string[];
 			  },
 	): void;
 
@@ -2137,6 +2138,7 @@ export interface ExtensionFlag {
 	description?: string;
 	type: "boolean" | "string";
 	default?: boolean | string;
+	choices?: readonly string[];
 	extensionPath: string;
 }
 
