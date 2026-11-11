@@ -80,5 +80,9 @@ for name in CI GITHUB_ACTIONS; do
 	[[ -z "$value" ]] || test_env+=("$name=$value")
 done
 
+if [[ $# -eq 0 ]]; then
+	set -- npm test
+fi
+
 echo "Running tests without API keys in isolated home: $test_root/home"
-env -i "${test_env[@]}" npm test
+env -i "${test_env[@]}" "$@"
