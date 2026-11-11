@@ -9,6 +9,7 @@ import {
 	getShellEnv,
 	killProcessTree,
 	type ShellConfig,
+	terminateProcessTree,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
@@ -38,7 +39,12 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(
+		Type.Number({
+			description:
+				"Timeout in seconds. Omit by default. Use only for an explicitly requested or measured finite ceiling when the command has no owning deadline or safe cancellation path; never use for Git, webx, durable operations, or verifiers with live progress.",
+		}),
+	),
 });
 
 export const bashToolSystemPromptContribution = {
@@ -142,6 +148,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			let timedOut = false;
 			let exitedBeforeDeadlineAfterMs: number | undefined;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			let timeoutTermination: Promise<void> | undefined;
 			const onAbort = () => {
 				if (child.pid) killProcessTree(child.pid);
 			};
@@ -152,9 +159,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
 						exitedBeforeDeadlineAfterMs = shellExitedAfterMs;
-						// Also when the shell already exited: on Unix the group kill still reaches background
-						// processes holding the pipes. Windows cannot find them once the shell pid is gone.
-						if (child.pid) killProcessTree(child.pid);
+						if (child.pid) timeoutTermination = terminateProcessTree(child.pid);
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
@@ -185,8 +190,9 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				}
 				return { exitCode: resolvedExitCode };
 			} finally {
-				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
+				if (timeoutTermination) await timeoutTermination;
+				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (signal) signal.removeEventListener("abort", onAbort);
 			}
 		},
@@ -280,7 +286,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Omit timeout unless the caller needs an explicit, measured deadline.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
