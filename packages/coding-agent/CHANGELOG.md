@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- String extension flags accept `choices` for CLI-level value validation.
+
 ## [1.5.2] - 2026-11-10
 
 ### New Features
