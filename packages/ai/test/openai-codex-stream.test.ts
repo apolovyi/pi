@@ -53,10 +53,19 @@ function buildSSEPayload({
 	status,
 	includeDone = false,
 	endTurn,
+	serviceTier,
+	usage = { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } },
 }: {
 	status: "completed" | "incomplete";
 	includeDone?: boolean;
 	endTurn?: boolean;
+	serviceTier?: string;
+	usage?: {
+		input_tokens: number;
+		output_tokens: number;
+		total_tokens: number;
+		input_tokens_details: { cached_tokens: number };
+	};
 }): string {
 	const terminalType = status === "incomplete" ? "response.incomplete" : "response.completed";
 	const events = [
@@ -82,12 +91,8 @@ function buildSSEPayload({
 				status,
 				end_turn: endTurn,
 				incomplete_details: status === "incomplete" ? { reason: "max_output_tokens" } : null,
-				usage: {
-					input_tokens: 5,
-					output_tokens: 3,
-					total_tokens: 8,
-					input_tokens_details: { cached_tokens: 0 },
-				},
+				service_tier: serviceTier,
+				usage,
 			},
 		})}`,
 	];
@@ -1318,101 +1323,59 @@ describe("openai-codex streaming", () => {
 	});
 
 	it.each([
-		["gpt-5.1-codex", "flex", 0.5],
-		["gpt-5.1-codex", "priority", 2],
-		["gpt-5.5", "flex", 0.5],
-		["gpt-5.5", "priority", 2.5],
+		["gpt-5.1-codex", "flex", "default", 0.5],
+		["gpt-5.1-codex", "priority", "default", 2],
+		["gpt-5.5", "flex", "default", 0.5],
+		["gpt-5.5", "priority", "default", 2.5],
+		["gpt-5.5", "priority", "fast", 2.5],
+		["gpt-6.1-sol", "priority", "fast", 2],
+		["gpt-6.1-sol", "default", "fast", 2],
+		["gpt-6.1-sol", "fast", "default", 2],
+		["gpt-6.1-sol", "priority", "flex", 0.5],
+		["gpt-6.1-sol", "priority", undefined, 2],
+		["gpt-6.1-sol", "default", undefined, 1],
 	] as const)(
-		"uses the client-sent %s service tier for %s when Codex echoes default",
-		async (modelId, serviceTier, multiplier) => {
-			const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-			process.env.PI_CODING_AGENT_DIR = tempDir;
-			const token = mockToken();
-			const sse = `${[
-				`data: ${JSON.stringify({
-					type: "response.output_item.added",
-					item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
-				})}`,
-				`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
-				`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
-				`data: ${JSON.stringify({
-					type: "response.output_item.done",
-					item: {
-						type: "message",
-						id: "msg_1",
-						role: "assistant",
-						status: "completed",
-						content: [{ type: "output_text", text: "Hello" }],
-					},
-				})}`,
-				`data: ${JSON.stringify({
-					type: "response.completed",
-					response: {
-						status: "completed",
-						service_tier: "default",
-						usage: {
-							input_tokens: 1000000,
-							output_tokens: 1000000,
-							total_tokens: 2000000,
-							input_tokens_details: { cached_tokens: 0 },
-						},
-					},
-				})}`,
-			].join("\n\n")}\n\n`;
-
-			const encoder = new TextEncoder();
-			const stream = new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(encoder.encode(sse));
-					controller.close();
-				},
-			});
-
-			const fetchMock = vi.fn(async (input: string | URL) => {
-				const url = typeof input === "string" ? input : input.toString();
-				if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
-					return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
-				}
-				if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
-					return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
-				}
-				if (url === "https://chatgpt.com/backend-api/codex/responses") {
-					return new Response(stream, {
-						status: 200,
-						headers: { "content-type": "text/event-stream" },
-					});
-				}
-				return new Response("not found", { status: 404 });
-			});
-			vi.stubGlobal("fetch", fetchMock);
-
+		"prices %s input, output, and cache with requested %s and returned %s tiers",
+		async (modelId, serviceTier, responseTier, multiplier) => {
 			const model: Model<"openai-codex-responses"> = {
 				id: modelId,
-				name: modelId === "gpt-5.5" ? "GPT-5.5" : "GPT-5.1 Codex",
+				name: modelId,
 				api: "openai-codex-responses",
 				provider: "openai-codex",
 				baseUrl: "https://chatgpt.com/backend-api",
 				reasoning: true,
 				input: ["text"],
-				cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+				cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
 				contextWindow: 400000,
 				maxTokens: 128000,
 			};
-
 			const context = normalizeContext({
-				systemPrompt: "You are a helpful assistant.",
-				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+				systemPrompt: "Synthetic pricing probe",
+				messages: [{ role: "user", content: "Synthetic request", timestamp: 0 }],
 			});
-
+			const sse = buildSSEPayload({
+				status: "completed",
+				serviceTier: responseTier,
+				usage: {
+					input_tokens: 2000000,
+					output_tokens: 1000000,
+					total_tokens: 3000000,
+					input_tokens_details: { cached_tokens: 1000000 },
+				},
+			});
 			const result = await streamOpenAICodexResponses(model, context, {
-				apiKey: token,
+				apiKey: mockToken(),
 				serviceTier,
 				transport: "sse",
+				fetch: async () => new Response(sse, { headers: { "content-type": "text/event-stream" } }),
 			}).result();
-
+			expect(result.stopReason).toBe("stop");
+			expect(result.usage.input).toBe(1000000);
+			expect(result.usage.cacheRead).toBe(1000000);
 			expect(result.usage.cost.input).toBe(1 * multiplier);
 			expect(result.usage.cost.output).toBe(2 * multiplier);
-			expect(result.usage.cost.total).toBe(3 * multiplier);
+			expect(result.usage.cost.cacheRead).toBe(0.5 * multiplier);
+			expect(result.usage.cost.total).toBe(3.5 * multiplier);
 		},
 	);
 

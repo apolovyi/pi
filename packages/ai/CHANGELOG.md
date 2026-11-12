@@ -6,6 +6,7 @@
 
 - Align managed Codex identity and routing with the final request payload, preserve session/thread metadata, and reconnect cached sockets when routing or identity changes.
 - Preserve request-local timing and estimate Codex costs from the final post-hook service tier using upstream pricing rules.
+- Price Codex `fast` responses and requests at the same rates as the equivalent `priority` tier, including cached input.
 
 ## [1.5.2] - 2026-11-10
 
