@@ -403,6 +403,7 @@ export {
 	type ProjectTrustStoreEntry,
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
+export { getSummaryUsage, type SummaryUsage } from "./core/usage-totals.ts";
 export {
 	type ModelRoute,
 	type ModelRouteReason,

@@ -101,6 +101,7 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { SummaryUsage } from "../usage-totals.ts";
 import type { ModelRoute, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
@@ -1017,6 +1018,7 @@ export interface CompactionEntryDraft {
 	firstKeptEntryId: string | null;
 	details?: unknown;
 	usage?: Usage;
+	usageDetails?: SummaryUsage[];
 }
 
 export type SessionBoundaryDraft =
@@ -1540,6 +1542,7 @@ export interface SessionBeforeTreeResult {
 		summary: string;
 		details?: unknown;
 		usage?: Usage;
+		usageDetails?: SummaryUsage[];
 	};
 	/** Override custom instructions for summarization */
 	customInstructions?: string;

@@ -1,5 +1,15 @@
-import type { Usage } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "./session-manager.ts";
+
+export type SummaryUsage = Pick<
+	AssistantMessage,
+	"api" | "provider" | "model" | "responseModel" | "responseId" | "timestamp" | "stopReason" | "usage" | "diagnostics"
+>;
+
+export function getSummaryUsage(response: AssistantMessage): SummaryUsage {
+	const { api, provider, model, responseModel, responseId, timestamp, stopReason, usage, diagnostics } = response;
+	return { api, provider, model, responseModel, responseId, timestamp, stopReason, usage, diagnostics };
+}
 
 export interface UsageTotals {
 	input: number;

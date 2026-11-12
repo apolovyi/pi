@@ -21,6 +21,7 @@ import {
 	type ReadonlySessionManager,
 	type SessionEntry,
 } from "../session-manager.ts";
+import { getSummaryUsage, type SummaryUsage } from "../usage-totals.ts";
 import { completeSummarization, estimateTokens, getSummarizationFailure } from "./compaction.ts";
 import {
 	computeFileLists,
@@ -39,6 +40,7 @@ import {
 export interface BranchSummaryResult {
 	summary?: string;
 	usage?: Usage;
+	usageDetails?: SummaryUsage[];
 	readFiles?: string[];
 	modifiedFiles?: string[];
 	aborted?: boolean;
@@ -392,6 +394,7 @@ export async function generateBranchSummary(
 	return {
 		summary: summary || "No summary generated",
 		usage: response.usage,
+		usageDetails: [getSummaryUsage(response)],
 		readFiles,
 		modifiedFiles,
 	};

@@ -15,7 +15,7 @@
 
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, getSummaryUsage, serializeConversation } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
@@ -97,14 +97,13 @@ ${conversationText}
 				return;
 			}
 
-			// Return compaction content - SessionManager adds id/parentId
-			// Use firstKeptEntryId from preparation to keep recent messages
 			return {
 				compaction: {
 					summary,
 					firstKeptEntryId,
 					tokensBefore,
 					usage: response.usage,
+					usageDetails: [getSummaryUsage(response)],
 				},
 			};
 		} catch (error) {

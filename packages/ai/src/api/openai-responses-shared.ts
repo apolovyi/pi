@@ -31,6 +31,7 @@ import type {
 	TranscriptContext,
 	Usage,
 } from "../types.ts";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -629,6 +630,7 @@ export async function processResponsesStream<TApi extends Api>(
 		if (response?.id) {
 			output.responseId = response.id;
 		}
+		if (response.model) output.responseModel = response.model;
 		if (response?.usage) {
 			const inputDetails = response.usage.input_tokens_details as
 				| { cached_tokens?: number; cache_write_tokens?: number }
@@ -652,6 +654,15 @@ export async function processResponsesStream<TApi extends Api>(
 				? options.resolveServiceTier(response?.service_tier, options.serviceTier)
 				: (response?.service_tier ?? options.serviceTier);
 			options.applyServiceTierPricing(output.usage, serviceTier);
+			appendAssistantMessageDiagnostic(output, {
+				type: "openai_responses_service_tier",
+				timestamp: Date.now(),
+				details: {
+					pricingRequestServiceTier: options.serviceTier ?? null,
+					responseServiceTier: response.service_tier ?? null,
+					appliedServiceTier: serviceTier ?? null,
+				},
+			});
 		}
 		// Map status to stop reason. For incomplete responses, retain the provider's
 		// specific reason so max-output truncation and content filtering stay distinct.

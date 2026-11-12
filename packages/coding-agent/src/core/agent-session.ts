@@ -150,7 +150,7 @@ import {
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
-import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
+import { addUsageToTotals, combineUsage, createUsageTotals, type SummaryUsage } from "./usage-totals.ts";
 import {
 	findLatestResponse,
 	getBranchSelection,
@@ -1035,6 +1035,7 @@ export class AgentSession {
 						draft.details,
 						true,
 						draft.usage,
+						draft.usageDetails,
 					);
 					break;
 				}
@@ -2986,17 +2987,17 @@ export class AgentSession {
 			let firstKeptEntryId: string;
 			let tokensBefore: number;
 			let usage: Usage | undefined;
+			let usageDetails: SummaryUsage[] | undefined;
 			let details: unknown;
 
 			if (extensionCompaction) {
-				// Extension provided compaction content
 				summary = extensionCompaction.summary;
 				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
 				tokensBefore = extensionCompaction.tokensBefore;
 				usage = extensionCompaction.usage;
+				usageDetails = extensionCompaction.usageDetails;
 				details = extensionCompaction.details;
 			} else {
-				// Shared default summary generator, also used by automatic compaction.
 				const result = await this._runDefaultCompaction(
 					preparation,
 					model,
@@ -3008,6 +3009,7 @@ export class AgentSession {
 				firstKeptEntryId = result.firstKeptEntryId;
 				tokensBefore = result.tokensBefore;
 				usage = result.usage;
+				usageDetails = result.usageDetails;
 				details = result.details;
 			}
 
@@ -3015,7 +3017,15 @@ export class AgentSession {
 				throw new Error("Compaction cancelled");
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+				usage,
+				usageDetails,
+			);
 			const newEntries = this.sessionManager.getEntries();
 			this._refreshFinalizedContext();
 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
@@ -3041,6 +3051,7 @@ export class AgentSession {
 				tokensBefore,
 				estimatedTokensAfter,
 				usage,
+				usageDetails,
 				details,
 			};
 			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
@@ -3315,17 +3326,17 @@ export class AgentSession {
 			let firstKeptEntryId: string;
 			let tokensBefore: number;
 			let usage: Usage | undefined;
+			let usageDetails: SummaryUsage[] | undefined;
 			let details: unknown;
 
 			if (extensionCompaction) {
-				// Extension provided compaction content
 				summary = extensionCompaction.summary;
 				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
 				tokensBefore = extensionCompaction.tokensBefore;
 				usage = extensionCompaction.usage;
+				usageDetails = extensionCompaction.usageDetails;
 				details = extensionCompaction.details;
 			} else {
-				// Shared default summary generator, also used by manual compaction.
 				const compactResult = await this._runDefaultCompaction(
 					preparation,
 					model,
@@ -3337,11 +3348,20 @@ export class AgentSession {
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
 				usage = compactResult.usage;
+				usageDetails = compactResult.usageDetails;
 				details = compactResult.details;
 			}
 			abortController.signal.throwIfAborted();
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+				usage,
+				usageDetails,
+			);
 			const newEntries = this.sessionManager.getEntries();
 			this._refreshFinalizedContext();
 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
@@ -3367,6 +3387,7 @@ export class AgentSession {
 				tokensBefore,
 				estimatedTokensAfter,
 				usage,
+				usageDetails,
 				details,
 			};
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
@@ -4193,7 +4214,7 @@ export class AgentSession {
 		this._branchSummaryAbortController = abortController;
 
 		try {
-			let extensionSummary: { summary: string; details?: unknown; usage?: Usage } | undefined;
+			let extensionSummary: SessionBeforeTreeResult["summary"];
 			let fromExtension = false;
 
 			// Emit session_before_tree event
@@ -4229,6 +4250,7 @@ export class AgentSession {
 			let summaryText: string | undefined;
 			let summaryDetails: unknown;
 			let summaryUsage: Usage | undefined;
+			let summaryUsageDetails: SummaryUsage[] | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const signal = abortController.signal;
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
@@ -4251,6 +4273,7 @@ export class AgentSession {
 				}
 				summaryText = result.summary ? result.summary + recoveryReference : result.summary;
 				summaryUsage = result.usage;
+				summaryUsageDetails = result.usageDetails;
 				summaryDetails = {
 					readFiles: result.readFiles || [],
 					modifiedFiles: result.modifiedFiles || [],
@@ -4259,6 +4282,7 @@ export class AgentSession {
 				summaryText = extensionSummary.summary;
 				summaryDetails = extensionSummary.details;
 				summaryUsage = extensionSummary.usage;
+				summaryUsageDetails = extensionSummary.usageDetails;
 			}
 
 			// Determine the new leaf position based on target type
@@ -4289,6 +4313,7 @@ export class AgentSession {
 					summaryDetails,
 					fromExtension,
 					summaryUsage,
+					summaryUsageDetails,
 				);
 				summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
 

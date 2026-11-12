@@ -150,7 +150,8 @@ interface CompactionEntry<T = unknown> {
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
-  usage?: Usage;       // LLM usage that generated the summary
+  usage?: Usage;
+  usageDetails?: SummaryUsage[];
   fromHook?: boolean;  // true if provided by extension (legacy field name)
   details?: T;         // implementation-specific data
 }
@@ -164,7 +165,13 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
-See [`prepareCompaction()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
+New built-in summaries also store `usageDetails`, one `SummaryUsage` per contributing response, in call order. Split compactions can have two records; reusing a previous summary without calling the model adds no record. Each record preserves the response's `api`, `provider`, `model`, optional `responseModel` and `responseId`, Unix-millisecond `timestamp`, `stopReason`, `usage` (including its original cost), and optional `diagnostics`. Records omit conversation content. `usage` remains the aggregate used by session accounting; do not add `usageDetails` to it again.
+
+OpenAI Responses diagnostics of type `openai_responses_service_tier` preserve `pricingRequestServiceTier` (the request-tier input to the pricing resolver), `responseServiceTier` (reported by the provider), and `appliedServiceTier` (used to price the stored usage). Missing values are `null`. An applied tier is not evidence of delivery: for example Codex can report `default` while pricing uses requested `fast`. Codex's separate `openai_codex_request` diagnostic records the actual post-hook `requestedServiceTier`. No delivered tier is inferred when the provider omits it.
+
+Extensions may supply `usageDetails` alongside `usage`; use the exported `getSummaryUsage(response)` to extract each record from an actual assistant response. Pi never attributes an extension's usage to the current context model. Older entries and extensions that omit provenance retain no `usageDetails`; loading them does not reprice or invent metadata. Failed/aborted operations append no summary entry, and failed retry attempts remain excluded from summary accounting as before.
+
+See [`prepareCompaction()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage, usageDetails }`.
 
 ## Branch Summarization
 
@@ -215,7 +222,8 @@ interface BranchSummaryEntry<T = unknown> {
   timestamp: string;
   summary: string;
   fromId: string;      // Entry we navigated from
-  usage?: Usage;       // LLM usage that generated the summary
+  usage?: Usage;
+  usageDetails?: SummaryUsage[];
   fromHook?: boolean;  // true if provided by extension (legacy field name)
   details?: T;         // implementation-specific data
 }

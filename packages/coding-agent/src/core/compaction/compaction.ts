@@ -33,7 +33,7 @@ import {
 	type SessionProjection,
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
-import { combineUsage } from "../usage-totals.ts";
+import { combineUsage, getSummaryUsage, type SummaryUsage } from "../usage-totals.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -107,8 +107,8 @@ export interface CompactionResult<T = unknown> {
 	firstKeptEntryId: string;
 	tokensBefore: number;
 	estimatedTokensAfter?: number;
-	/** Usage from the LLM call(s) that generated this summary, if available */
 	usage?: Usage;
+	usageDetails?: SummaryUsage[];
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
 	details?: T;
 }
@@ -692,11 +692,9 @@ function buildSummarizationContext(promptText: string): TranscriptContext {
 	});
 }
 
-/** Generate or update a conversation summary and return its provider usage. */
 export async function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
-	// Unused. Kept for existing callers; summaries use the model's output limit (#9512).
 	_reserveTokens: number | undefined,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
@@ -709,8 +707,7 @@ export async function generateSummaryWithUsage(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
-): Promise<{ text: string; usage: Usage }> {
-	// Use update prompt if we have a previous summary, otherwise initial prompt
+): Promise<{ text: string; usage: Usage; usageDetails: SummaryUsage[] }> {
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
@@ -749,7 +746,7 @@ export async function generateSummaryWithUsage(
 
 	const textContent = contentText(response.content);
 
-	return { text: textContent, usage: response.usage };
+	return { text: textContent, usage: response.usage, usageDetails: [getSummaryUsage(response)] };
 }
 
 // ============================================================================
@@ -973,9 +970,9 @@ export async function compact(
 		fileOps,
 	} = preparation;
 
-	// Generate summaries and merge into one
 	let summary: string;
 	let summaryUsage: Usage;
+	const usageDetails: SummaryUsage[] = [];
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
 		let historyText = previousSummary ?? "No prior history.";
@@ -999,6 +996,7 @@ export async function compact(
 			);
 			historyText = historyResult.text;
 			historyUsage = historyResult.usage;
+			usageDetails.push(...historyResult.usageDetails);
 		}
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
@@ -1014,11 +1012,10 @@ export async function compact(
 			sessionId,
 			customInstructions,
 		);
-		// Merge into single summary
+		usageDetails.push(...turnPrefixResult.usageDetails);
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`;
 		summaryUsage = historyUsage ? combineUsage(historyUsage, turnPrefixResult.usage) : turnPrefixResult.usage;
 	} else {
-		// Just generate history summary
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
@@ -1037,6 +1034,7 @@ export async function compact(
 		);
 		summary = result.text;
 		summaryUsage = result.usage;
+		usageDetails.push(...result.usageDetails);
 	}
 
 	// Compute file lists and append to summary
@@ -1052,13 +1050,11 @@ export async function compact(
 		firstKeptEntryId,
 		tokensBefore,
 		usage: summaryUsage,
+		usageDetails,
 		details: { readFiles, modifiedFiles } as CompactionDetails,
 	};
 }
 
-/**
- * Generate a summary for a turn prefix (when splitting a turn).
- */
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model<any>,
@@ -1072,7 +1068,7 @@ async function generateTurnPrefixSummary(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 	customInstructions?: string,
-): Promise<{ text: string; usage: Usage }> {
+): Promise<{ text: string; usage: Usage; usageDetails: SummaryUsage[] }> {
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	let promptText = `# Conversation\n${conversationText}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -1100,5 +1096,6 @@ async function generateTurnPrefixSummary(
 	return {
 		text: contentText(response.content),
 		usage: response.usage,
+		usageDetails: [getSummaryUsage(response)],
 	};
 }
