@@ -297,6 +297,110 @@ describe("createAgentSession stream options", () => {
 		]);
 	});
 
+	it("preserves explicitly supplied provider callbacks", async () => {
+		const onPayload: NonNullable<SimpleStreamOptions["onPayload"]> = (payload) => payload;
+		const onResponse: NonNullable<SimpleStreamOptions["onResponse"]> = () => {};
+		const onProviderStreamEvent: NonNullable<SimpleStreamOptions["onProviderStreamEvent"]> = () => {};
+		const options = await captureStreamOptions(
+			"openai-completions",
+			{},
+			{
+				onPayload,
+				onResponse,
+				onProviderStreamEvent,
+			},
+		);
+
+		expect(options?.onPayload).toBe(onPayload);
+		expect(options?.onResponse).toBe(onResponse);
+		expect(options?.onProviderStreamEvent).toBe(onProviderStreamEvent);
+	});
+
+	it("runs provider hooks once per prompt, split compaction, and branch summary request", async () => {
+		const model = { ...createModel("openai-completions"), reasoning: true };
+		const settingsManager = SettingsManager.inMemory({
+			defaultThinkingLevel: "high",
+			compaction: { keepRecentTokens: 1 },
+			retry: { enabled: false },
+		});
+		const hookEvents: string[] = [];
+		const payload = { model: model.id, service_tier: "priority" };
+		const providerEvent = { type: "response.completed" };
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			extensionFactories: [
+				(pi) => {
+					pi.on("before_provider_request", () => {
+						hookEvents.push("payload");
+						return payload;
+					});
+					pi.on("after_provider_response", (event) => {
+						hookEvents.push(`response:${event.status}`);
+					});
+					pi.on("provider_stream_event", () => {
+						hookEvents.push("stream");
+					});
+				},
+			],
+		});
+		await resourceLoader.reload();
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		const requestOptions: Array<SimpleStreamOptions | undefined> = [];
+		const sentPayloads: unknown[] = [];
+		modelRegistry.registerProvider(model.provider, {
+			api: model.api,
+			streamSimple: (requestModel, _context, options) => {
+				requestOptions.push(options);
+				const stream = createAssistantMessageEventStream();
+				void (async () => {
+					sentPayloads.push(await options?.onPayload?.({ model: requestModel.id }, requestModel));
+					await options?.onResponse?.({ status: 200, headers: {} }, requestModel);
+					await options?.onProviderStreamEvent?.(providerEvent, requestModel);
+					stream.end(createDoneMessage(model.api));
+				})();
+				return stream;
+			},
+		});
+		const sessionManager = SessionManager.inMemory(cwd);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			modelRuntime: getModelRuntime(modelRegistry),
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+			noTools: "all",
+		});
+		try {
+			await session.prompt("Synthetic fixture: choose a color.");
+			const earlierEntryId = sessionManager.getLeafId()!;
+			sessionManager.appendMessage({
+				role: "user",
+				content: "Synthetic fixture: choose a shape.",
+				timestamp: Date.now(),
+			});
+			sessionManager.appendMessage(createDoneMessage(model.api));
+			session.refreshContext();
+			const compaction = await session.compact();
+			expect(compaction.usageDetails).toHaveLength(2);
+			const navigation = await session.navigateTree(earlierEntryId, { summarize: true });
+			expect(navigation.cancelled).toBe(false);
+			expect(navigation.summaryEntry?.usageDetails).toHaveLength(1);
+			expect(sentPayloads).toEqual([payload, payload, payload, payload]);
+			expect(hookEvents).toEqual(Array.from({ length: 4 }, () => ["payload", "response:200", "stream"]).flat());
+			expect(requestOptions.map((options) => options?.reasoning)).toEqual(["high", "high", "high", "high"]);
+			expect(requestOptions.slice(1).map((options) => options?.cacheRetention)).toEqual(["none", "none", "none"]);
+		} finally {
+			session.dispose();
+			modelRegistry.unregisterProvider(model.provider);
+		}
+	});
+
 	it("runs before_provider_headers on assembled headers without forwarding the transform", async () => {
 		const options = await captureStreamOptions(
 			"openai-completions",

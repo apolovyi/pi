@@ -7,6 +7,10 @@
 - String extension flags accept `choices` for CLI-level value validation.
 - Compaction and branch summaries retain per-response model, usage, and diagnostic provenance in `usageDetails`, without changing aggregate accounting. Extensions can supply records with `getSummaryUsage(response)`.
 
+### Fixed
+
+- Session summary requests now run provider payload, response, and stream-event extension hooks, preserving caller-supplied callbacks.
+
 ## [1.5.2] - 2026-11-10
 
 ### New Features
